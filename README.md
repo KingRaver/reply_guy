@@ -1,10 +1,10 @@
-# 🚀 CryptoAnalysisBot
+# 🚀 Crypto Analysis Agent
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Anthropic Claude](https://img.shields.io/badge/AI-Anthropic%20Claude-9cf)](https://www.anthropic.com/)
 [![CoinGecko API](https://img.shields.io/badge/API-CoinGecko-brightgreen)](https://www.coingecko.com/en/api)
 
-An advanced cryptocurrency analysis bot that leverages AI and market data to provide intelligent market insights, predictions, and social media engagement. The bot combines real-time market data with Anthropic's Claude AI to generate high-quality analysis across multiple timeframes.
+An advanced cryptocurrency analysis agent that leverages AI and market data to provide intelligent market insights, predictions, and social media engagement. The bot combines real-time market data with Anthropic's Claude AI to generate high-quality analysis across multiple timeframes.
 
 ## ✨ Features
 
@@ -72,7 +72,7 @@ An advanced cryptocurrency analysis bot that leverages AI and market data to pro
 
 1. Clone the repository
    ```bash
-   git clone https://github.com/yourusername/crypto-analysis-bot.git
+   git clone https://github.com/kingraver/reply_guy.git
    cd crypto-analysis-bot
    ```
 
@@ -91,12 +91,12 @@ An advanced cryptocurrency analysis bot that leverages AI and market data to pro
 
 4. Run the bot
    ```bash
-   python crypto_analysis_bot.py
+   python reply_guy.py
    ```
 
 ## 🔧 Configuration Options
 
-The bot is highly configurable to suit different analysis needs:
+The agent is highly configurable to suit different analysis needs:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
@@ -109,7 +109,7 @@ The bot is highly configurable to suit different analysis needs:
 
 ## 📊 Performance Metrics
 
-The bot tracks its prediction performance across timeframes and tokens:
+The agent tracks its prediction performance across timeframes and tokens:
 
 ```
 == 1 HOUR PREDICTIONS ==
@@ -173,7 +173,7 @@ Contributions, issues, and feature requests are welcome! Feel free to check the 
 
 ## 📧 Contact
 
-For questions or support, please reach out to: your.email@example.com
+For questions or support, please reach out to: vividvisions.ai@gmail.com
 
 ---
 
