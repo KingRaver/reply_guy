@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
 import time
 import random
 import re
@@ -10,12 +10,15 @@ import anthropic
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import (
     TimeoutException,
     NoSuchElementException,
     StaleElementReferenceException,
     WebDriverException,
-    ElementClickInterceptedException
+    ElementClickInterceptedException,
+    ElementNotInteractableException,
+    InvalidElementStateException
 )
 from selenium.webdriver.common.keys import Keys
 
@@ -28,7 +31,7 @@ class ReplyHandler:
     
     def __init__(self, browser, config, claude_client, coingecko=None, db=None):
         """
-        Initialize the reply handler
+        Initialize the reply handler with multiple selectors for resilience
         
         Args:
             browser: Browser instance for web interaction
@@ -48,17 +51,37 @@ class ReplyHandler:
         self.claude_model = "claude-3-7-sonnet-20250219"  # Using the latest model
         self.max_tokens = 300
         
-        # Element selectors for reply interactions
-        self.reply_button_selector = '[data-testid="reply"]'
-        self.reply_textarea_selector = '[data-testid="tweetTextarea_0"]'
-        self.reply_send_button_selector = '[data-testid="tweetButton"]'
+        # Multiple selectors for each element type to increase resilience
+        self.reply_button_selectors = [
+            '[data-testid="reply"]',
+            'div[role="button"] span:has-text("Reply")',
+            'button[aria-label*="Reply"]',
+            'div[role="button"][aria-label*="Reply"]',
+            'div[aria-label*="Reply"]'
+        ]
+        
+        self.reply_textarea_selectors = [
+            '[data-testid="tweetTextarea_0"]',
+            '[data-testid*="tweetTextarea"]',
+            '[contenteditable="true"]',
+            'div[role="textbox"]',
+            'div.DraftEditor-root'
+        ]
+        
+        self.reply_send_button_selectors = [
+            '[data-testid="tweetButton"]',
+            'button[data-testid="tweetButton"]',
+            'div[role="button"]:has-text("Reply")',
+            'div[role="button"]:has-text("Post")',
+            'button[type="submit"]'
+        ]
         
         # Track posts we've recently replied to (in-memory cache)
         self.recent_replies = []
         self.max_recent_replies = 100
         
         logger.logger.info("Reply handler initialized")
-    
+
     def generate_reply(self, post: Dict[str, Any], market_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """
         Generate a witty market-related reply using Claude API
@@ -71,14 +94,27 @@ class ReplyHandler:
             Generated reply text or None if generation failed
         """
         try:
+            logger.logger.debug(f"Starting reply generation for post: '{post.get('text', '')[:50]}...'")
+            
             # Extract post details
             post_text = post.get('text', '')
             author_name = post.get('author_name', 'someone')
             author_handle = post.get('author_handle', '@someone')
             
+            logger.logger.debug(f"Generating reply to {author_handle}'s post: '{post_text[:50]}...'")
+            
             # Prepare market data context if available
             market_context = ""
             market_symbols = []
+            
+            # Look for any crypto/market symbols in the post
+            all_symbols = [
+                'btc', 'eth', 'sol', 'xrp', 'bnb', 'avax', 'dot', 'uni', 
+                'near', 'aave', 'matic', 'fil', 'pol', 'ada', 'doge', 'shib'
+            ]
+            
+            mentioned_symbols = [symbol for symbol in all_symbols if symbol in post_text.lower()]
+            logger.logger.debug(f"Found market symbols in post: {mentioned_symbols}")
             
             if market_data:
                 # Build market context for top coins
@@ -98,14 +134,6 @@ class ReplyHandler:
                         market_context += f"- {name} ({symbol}): ${price:,.2f} ({change_24h:+.2f}%)\n"
                         market_symbols.append(symbol.lower())
             
-            # Look for any crypto/market symbols in the post
-            all_symbols = [
-                'btc', 'eth', 'sol', 'xrp', 'bnb', 'avax', 'dot', 'uni', 
-                'near', 'aave', 'matic', 'fil', 'pol', 'ada', 'doge', 'shib'
-            ]
-            
-            mentioned_symbols = [symbol for symbol in all_symbols if symbol in post_text.lower()]
-            
             # Add symbols specifically mentioned in the post
             if mentioned_symbols:
                 market_symbols.extend(mentioned_symbols)
@@ -115,6 +143,7 @@ class ReplyHandler:
             
             # Detect potential market topics in the post
             market_topics = self._detect_market_topics(post_text)
+            logger.logger.debug(f"Detected market topics: {market_topics}")
             
             # Build the prompt for Claude
             prompt = f"""You are an intelligent, witty crypto/market commentator replying to posts on social media. 
@@ -143,7 +172,7 @@ Your reply (maximum 240 characters):
 """
 
             # Generate reply using Claude
-            logger.logger.debug(f"Generating reply to post by {author_handle}")
+            logger.logger.debug(f"Sending prompt to Claude for reply generation")
             response = self.claude_client.messages.create(
                 model=self.claude_model,
                 max_tokens=self.max_tokens,
@@ -152,6 +181,7 @@ Your reply (maximum 240 characters):
             
             # Extract reply text
             reply_text = response.content[0].text.strip()
+            logger.logger.debug(f"Raw Claude response: '{reply_text[:100]}...'")
             
             # Make sure the reply isn't too long for Twitter (240 chars max)
             if len(reply_text) > 240:
@@ -172,7 +202,7 @@ Your reply (maximum 240 characters):
                         # Hard truncate as last resort
                         reply_text = reply_text[:237] + "..."
             
-            logger.logger.info(f"Generated reply ({len(reply_text)} chars)")
+            logger.logger.info(f"Generated reply ({len(reply_text)} chars): {reply_text}")
             return reply_text
             
         except Exception as e:
@@ -225,10 +255,10 @@ Your reply (maximum 240 characters):
                 topics.append(topic)
                 
         return topics
-    
+
     def post_reply(self, post: Dict[str, Any], reply_text: str) -> bool:
         """
-        Navigate to the post and submit a reply
+        Navigate to the post and submit a reply with improved resilience
         
         Args:
             post: Post data dictionary
@@ -267,54 +297,268 @@ Your reply (maximum 240 characters):
                 # Navigate to the post
                 logger.logger.debug(f"Navigating to post: {post_url}")
                 self.browser.driver.get(post_url)
+                time.sleep(3)  # Allow time for page to load
                 
-                # Wait for page to load
-                WebDriverWait(self.browser.driver, 20).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweet"]'))
-                )
+                # Try both twitter.com and x.com URLs if needed
+                if "twitter.com" in post_url and "Page not found" in self.browser.driver.title:
+                    x_url = post_url.replace("twitter.com", "x.com")
+                    logger.logger.debug(f"Trying alternative URL: {x_url}")
+                    self.browser.driver.get(x_url)
+                    time.sleep(3)
                 
-                # Find the reply button and click it
-                reply_button = WebDriverWait(self.browser.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, self.reply_button_selector))
-                )
+                # Wait for page to load - try multiple selectors
+                page_loaded = False
+                for selector in ['article', '[data-testid="tweet"]', 'div[data-testid="cellInnerDiv"]']:
+                    try:
+                        WebDriverWait(self.browser.driver, 10).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                        page_loaded = True
+                        logger.logger.debug(f"Page loaded, found element with selector: {selector}")
+                        break
+                    except TimeoutException:
+                        continue
                 
-                # Click the reply button
-                self.browser.js_click(self.reply_button_selector)
+                if not page_loaded:
+                    logger.logger.warning("Could not confirm page loaded with any selector")
+                    retry_count += 1
+                    time.sleep(self.retry_delay)
+                    continue
                 
-                # Wait for reply text area to appear
-                reply_textarea = WebDriverWait(self.browser.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, self.reply_textarea_selector))
-                )
+                # Take screenshot for debugging
+                try:
+                    debug_screenshot = f"reply_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    self.browser.driver.save_screenshot(debug_screenshot)
+                    logger.logger.debug(f"Saved reply debugging screenshot to {debug_screenshot}")
+                except Exception as ss_error:
+                    logger.logger.debug(f"Failed to save debugging screenshot: {str(ss_error)}")
                 
-                # Enter reply text
-                reply_textarea.click()
-                time.sleep(1)
+                # Find and click the reply button using multiple selectors
+                reply_button = None
+                for selector in self.reply_button_selectors:
+                    try:
+                        logger.logger.debug(f"Trying to find reply button with selector: {selector}")
+                        reply_button = WebDriverWait(self.browser.driver, 5).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
+                        if reply_button:
+                            logger.logger.debug(f"Found reply button using selector: {selector}")
+                            break
+                    except Exception as e:
+                        logger.logger.debug(f"Could not find reply button with selector '{selector}': {str(e)}")
+                        continue
                 
-                # Clear any existing text
-                reply_textarea.clear()
+                if not reply_button:
+                    logger.logger.warning("Could not find reply button with any selector")
+                    retry_count += 1
+                    time.sleep(self.retry_delay)
+                    continue
                 
-                # Enter reply text using the safe method
-                self.browser.safe_send_keys(self.reply_textarea_selector, reply_text)
+                # Try multiple methods to click the reply button
+                click_success = False
                 
-                # Wait a moment for the Send button to become active
+                # Method 1: JavaScript click
+                try:
+                    logger.logger.debug("Attempting to click reply button using JavaScript")
+                    self.browser.driver.execute_script("arguments[0].click();", reply_button)
+                    click_success = True
+                    logger.logger.debug("Clicked reply button with JavaScript")
+                except Exception as js_error:
+                    logger.logger.debug(f"JavaScript click failed: {str(js_error)}")
+                
+                # Method 2: Standard click if JavaScript failed
+                if not click_success:
+                    try:
+                        logger.logger.debug("Attempting to click reply button using standard click")
+                        reply_button.click()
+                        click_success = True
+                        logger.logger.debug("Clicked reply button with standard click")
+                    except Exception as click_error:
+                        logger.logger.debug(f"Standard click failed: {str(click_error)}")
+                
+                # Method 3: Action chains if both methods failed
+                if not click_success:
+                    try:
+                        logger.logger.debug("Attempting to click reply button using ActionChains")
+                        ActionChains(self.browser.driver).move_to_element(reply_button).click().perform()
+                        click_success = True
+                        logger.logger.debug("Clicked reply button with ActionChains")
+                    except Exception as action_error:
+                        logger.logger.debug(f"ActionChains click failed: {str(action_error)}")
+                
+                if not click_success:
+                    logger.logger.warning("Could not click reply button with any method")
+                    retry_count += 1
+                    time.sleep(self.retry_delay)
+                    continue
+                
+                # Wait for reply area to appear
                 time.sleep(2)
                 
-                # Click the reply/send button
-                reply_send_button = WebDriverWait(self.browser.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, self.reply_send_button_selector))
-                )
+                # Find the reply textarea using multiple selectors
+                reply_textarea = None
+                for selector in self.reply_textarea_selectors:
+                    try:
+                        logger.logger.debug(f"Trying to find reply textarea with selector: {selector}")
+                        reply_textarea = WebDriverWait(self.browser.driver, 5).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
+                        if reply_textarea:
+                            logger.logger.debug(f"Found reply textarea using selector: {selector}")
+                            break
+                    except Exception as e:
+                        logger.logger.debug(f"Could not find textarea with selector '{selector}': {str(e)}")
+                        continue
                 
-                # Try JavaScript click first
-                success = self.browser.js_click(self.reply_send_button_selector)
+                if not reply_textarea:
+                    logger.logger.warning("Could not find reply textarea with any selector")
+                    retry_count += 1
+                    time.sleep(self.retry_delay)
+                    continue
                 
-                if not success:
-                    # Try direct click as fallback
-                    reply_send_button.click()
+                # Focus the textarea
+                try:
+                    reply_textarea.click()
+                    time.sleep(1)
+                except Exception as click_error:
+                    logger.logger.debug(f"Could not click textarea: {str(click_error)}")
+                    # Try scrolling to it first
+                    try:
+                        self.browser.driver.execute_script("arguments[0].scrollIntoView(true);", reply_textarea)
+                        time.sleep(1)
+                        reply_textarea.click()
+                    except Exception as e:
+                        logger.logger.debug(f"Could not focus textarea after scroll: {str(e)}")
+                        retry_count += 1
+                        time.sleep(self.retry_delay)
+                        continue
                 
-                # Wait for reply to be sent (button disappears or changes)
+                # Clear any existing text
+                try:
+                    reply_textarea.clear()
+                except Exception as clear_error:
+                    logger.logger.debug(f"Could not clear textarea: {str(clear_error)}")
+                
+                # Try multiple methods to enter text
+                text_entry_success = False
+                
+                # Method 1: Direct send_keys
+                try:
+                    logger.logger.debug("Attempting to enter reply text using send_keys")
+                    reply_textarea.send_keys(reply_text)
+                    text_entry_success = True
+                    logger.logger.debug("Entered text using send_keys")
+                except Exception as keys_error:
+                    logger.logger.debug(f"send_keys failed: {str(keys_error)}")
+                
+                # Method 2: JavaScript to set value
+                if not text_entry_success:
+                    try:
+                        logger.logger.debug("Attempting to enter reply text using JavaScript")
+                        self.browser.driver.execute_script(
+                            "arguments[0].textContent = arguments[1]; arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", 
+                            reply_textarea, 
+                            reply_text
+                        )
+                        text_entry_success = True
+                        logger.logger.debug("Entered text using JavaScript")
+                    except Exception as js_error:
+                        logger.logger.debug(f"JavaScript text entry failed: {str(js_error)}")
+                
+                # Method 3: ActionChains
+                if not text_entry_success:
+                    try:
+                        logger.logger.debug("Attempting to enter reply text using ActionChains")
+                        ActionChains(self.browser.driver).move_to_element(reply_textarea).click().send_keys(reply_text).perform()
+                        text_entry_success = True
+                        logger.logger.debug("Entered text using ActionChains")
+                    except Exception as action_error:
+                        logger.logger.debug(f"ActionChains text entry failed: {str(action_error)}")
+                
+                # Method 4: Char by char
+                if not text_entry_success:
+                    try:
+                        logger.logger.debug("Attempting to enter reply text character by character")
+                        for char in reply_text:
+                            reply_textarea.send_keys(char)
+                            time.sleep(0.05)
+                        text_entry_success = True
+                        logger.logger.debug("Entered text character by character")
+                    except Exception as char_error:
+                        logger.logger.debug(f"Character by character entry failed: {str(char_error)}")
+                
+                if not text_entry_success:
+                    logger.logger.warning("Could not enter reply text with any method")
+                    retry_count += 1
+                    time.sleep(self.retry_delay)
+                    continue
+                
+                # Wait for the text to be processed
+                time.sleep(2)
+                
+                # Find the send button using multiple selectors
+                send_button = None
+                for selector in self.reply_send_button_selectors:
+                    try:
+                        logger.logger.debug(f"Trying to find send button with selector: {selector}")
+                        send_button = WebDriverWait(self.browser.driver, 5).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
+                        if send_button:
+                            logger.logger.debug(f"Found send button using selector: {selector}")
+                            break
+                    except Exception as e:
+                        logger.logger.debug(f"Could not find send button with selector '{selector}': {str(e)}")
+                        continue
+                
+                if not send_button:
+                    logger.logger.warning("Could not find send button with any selector")
+                    retry_count += 1
+                    time.sleep(self.retry_delay)
+                    continue
+                
+                # Try multiple methods to click the send button
+                send_success = False
+                
+                # Method 1: JavaScript click
+                try:
+                    logger.logger.debug("Attempting to click send button using JavaScript")
+                    self.browser.driver.execute_script("arguments[0].click();", send_button)
+                    send_success = True
+                    logger.logger.debug("Clicked send button with JavaScript")
+                except Exception as js_error:
+                    logger.logger.debug(f"JavaScript click failed: {str(js_error)}")
+                
+                # Method 2: Standard click if JavaScript failed
+                if not send_success:
+                    try:
+                        logger.logger.debug("Attempting to click send button using standard click")
+                        send_button.click()
+                        send_success = True
+                        logger.logger.debug("Clicked send button with standard click")
+                    except Exception as click_error:
+                        logger.logger.debug(f"Standard click failed: {str(click_error)}")
+                
+                # Method 3: Action chains if both methods failed
+                if not send_success:
+                    try:
+                        logger.logger.debug("Attempting to click send button using ActionChains")
+                        ActionChains(self.browser.driver).move_to_element(send_button).click().perform()
+                        send_success = True
+                        logger.logger.debug("Clicked send button with ActionChains")
+                    except Exception as action_error:
+                        logger.logger.debug(f"ActionChains click failed: {str(action_error)}")
+                
+                if not send_success:
+                    logger.logger.warning("Could not click send button with any method")
+                    retry_count += 1
+                    time.sleep(self.retry_delay)
+                    continue
+                
+                # Wait for reply to be sent
                 time.sleep(5)
                 
-                # Check if the reply was successfully posted
+                # Verify that the reply was posted successfully
                 if self._verify_reply_posted():
                     logger.logger.info(f"Successfully replied to post by {author_handle}")
                     
@@ -334,12 +578,12 @@ Your reply (maximum 240 characters):
                     
                     return True
                 else:
-                    logger.logger.warning(f"Reply may not have been posted, verification failed")
+                    logger.logger.warning(f"Reply verification failed, may not have been posted")
                     retry_count += 1
                     time.sleep(self.retry_delay)
                     
-            except TimeoutException:
-                logger.logger.warning(f"Timeout while trying to reply to post (attempt {retry_count + 1})")
+            except TimeoutException as te:
+                logger.logger.warning(f"Timeout while trying to reply to post: {str(te)} (attempt {retry_count + 1})")
                 retry_count += 1
                 time.sleep(self.retry_delay)
                 
@@ -355,118 +599,89 @@ Your reply (maximum 240 characters):
         
         logger.logger.error(f"Failed to post reply to {author_handle} after {self.max_retries} attempts")
         return False
-    
+
     def _verify_reply_posted(self) -> bool:
         """
-        Verify that a reply was successfully posted
+        Verify that a reply was successfully posted using multiple methods
         
         Returns:
             True if verification succeeded, False otherwise
         """
         try:
-            # Look for indicators that the reply was posted
-            # This could be a success message, or returning to the main tweet page
+            # Method 1: Check if reply compose area is no longer visible
+            textarea_gone = False
+            for selector in self.reply_textarea_selectors:
+                try:
+                    WebDriverWait(self.browser.driver, 5).until_not(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    textarea_gone = True
+                    logger.logger.debug(f"Verified reply posted - textarea {selector} no longer visible")
+                    break
+                except TimeoutException:
+                    continue
             
-            # Check if reply compose area is no longer visible
-            try:
-                WebDriverWait(self.browser.driver, 5).until_not(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, self.reply_textarea_selector))
-                )
+            if textarea_gone:
                 return True
-            except TimeoutException:
-                # If the reply area is still visible, the reply probably failed
-                return False
+            
+            # Method 2: Check if success indicators are present
+            success_indicators = [
+                '[data-testid="toast"]',  # Success toast notification
+                '[role="alert"]',         # Alert role that might indicate success
+                '.css-1dbjc4n[style*="background-color: rgba(0, 0, 0, 0)"]'  # Modal closed
+            ]
+            
+            for indicator in success_indicators:
+                try:
+                    WebDriverWait(self.browser.driver, 3).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, indicator))
+                    )
+                    logger.logger.debug(f"Verified reply posted - found success indicator: {indicator}")
+                    return True
+                except TimeoutException:
+                    continue
+            
+            # Method 3: Check if URL changed
+            current_url = self.browser.driver.current_url
+            if '/compose/' not in current_url:
+                logger.logger.debug("Verified reply posted - no longer on compose URL")
+                return True
+            
+            # Method 4: Check if send button is disabled or gone
+            for selector in self.reply_send_button_selectors:
+                try:
+                    # Check for disabled state
+                    send_buttons = self.browser.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if not send_buttons:
+                        logger.logger.debug(f"Verified reply posted - send button {selector} no longer present")
+                        return True
+                    
+                    # If button exists, check if it's disabled
+                    for button in send_buttons:
+                        aria_disabled = button.get_attribute('aria-disabled')
+                        is_disabled = button.get_attribute('disabled')
+                        if aria_disabled == 'true' or is_disabled == 'true':
+                            logger.logger.debug(f"Verified reply posted - send button is now disabled")
+                            return True
+                except Exception:
+                    continue
+            
+            # If we get here, no verification method succeeded
+            logger.logger.warning("Could not verify if reply was posted with any method")
+            
+            # Take screenshot for debugging
+            try:
+                debug_screenshot = f"reply_verification_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                self.browser.driver.save_screenshot(debug_screenshot)
+                logger.logger.debug(f"Saved verification debugging screenshot to {debug_screenshot}")
+            except Exception as e:
+                logger.logger.debug(f"Failed to save verification screenshot: {str(e)}")
+            
+            return False
             
         except Exception as e:
             logger.logger.warning(f"Reply verification error: {str(e)}")
             return False
-    
-    def prioritize_posts_for_reply(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Sort posts by priority for replying (engagement, follower count, recency)
-        
-        Args:
-            posts: List of post data dictionaries
-            
-        Returns:
-            Sorted list of posts
-        """
-        # Define weights for different factors
-        engagement_weight = 0.6
-        recency_weight = 0.4
-        
-        # Calculate a combined score for each post
-        for post in posts:
-            # Engagement score (already calculated)
-            engagement_score = post.get('engagement_score', 0)
-            
-            # Recency score (higher for more recent posts)
-            timestamp = post.get('timestamp', datetime.now())
-            hours_ago = (datetime.now() - timestamp).total_seconds() / 3600 if timestamp else 24
-            recency_score = max(0, 100 - (hours_ago * 5))  # Decreases by 5 points per hour
-            
-            # Combined score
-            combined_score = (
-                engagement_score * engagement_weight +
-                recency_score * recency_weight
-            )
-            
-            post['reply_priority_score'] = combined_score
-            
-        # Sort by combined score (highest first)
-        sorted_posts = sorted(posts, key=lambda x: x.get('reply_priority_score', 0), reverse=True)
-        
-        return sorted_posts
-    
-    def reply_to_posts(self, posts: List[Dict[str, Any]], market_data: Optional[Dict[str, Any]] = None, max_replies: int = 5) -> int:
-        """
-        Generate and post replies to a list of posts
-        
-        Args:
-            posts: List of post data dictionaries
-            market_data: Market data from CoinGecko (optional)
-            max_replies: Maximum number of replies to send
-            
-        Returns:
-            Number of successful replies
-        """
-        if not posts:
-            return 0
-            
-        # Filter out posts we've already replied to
-        filtered_posts = [p for p in posts if not self._already_replied(p.get('post_id'))]
-        
-        if self.db:
-            filtered_posts = [p for p in filtered_posts 
-                             if not self.db.check_if_post_replied(p.get('post_id'), p.get('post_url'))]
-            
-        # Prioritize remaining posts
-        prioritized_posts = self.prioritize_posts_for_reply(filtered_posts)
-        
-        # Limit to max_replies
-        posts_to_reply = prioritized_posts[:max_replies]
-        
-        successful_replies = 0
-        
-        for post in posts_to_reply:
-            # Generate reply
-            reply_text = self.generate_reply(post, market_data)
-            
-            if not reply_text:
-                logger.logger.warning(f"Failed to generate reply for post by {post.get('author_handle')}")
-                continue
-                
-            # Add slight delay between replies to avoid rate limiting
-            if successful_replies > 0:
-                delay = random.uniform(10, 20)  # 10-20 seconds between replies
-                logger.logger.debug(f"Waiting {delay:.1f} seconds before next reply")
-                time.sleep(delay)
-                
-            # Post reply
-            if self.post_reply(post, reply_text):
-                successful_replies += 1
-            
-        return successful_replies
     
     def _already_replied(self, post_id: str) -> bool:
         """
@@ -495,3 +710,360 @@ Your reply (maximum 240 characters):
         # Keep the list at a reasonable size
         if len(self.recent_replies) > self.max_recent_replies:
             self.recent_replies.pop(0)  # Remove oldest entry
+    
+    def _extract_mentioned_tokens(self, post_text: str) -> List[str]:
+        """
+        Extract cryptocurrency token symbols mentioned in post text
+        
+        Args:
+            post_text: Text content of the post
+            
+        Returns:
+            List of token symbols found in the text
+        """
+        if not post_text:
+            return []
+        
+        # Common crypto tokens to look for
+        tokens = [
+            'btc', 'eth', 'sol', 'xrp', 'ada', 'dot', 'doge', 'shib', 'bnb',
+            'avax', 'matic', 'link', 'ltc', 'etc', 'bch', 'uni', 'atom'
+        ]
+        
+        # Look for both direct mentions and $-prefixed mentions
+        mentioned = []
+        post_text_lower = post_text.lower()
+        
+        # First check for $-prefixed tokens (stronger signal)
+        for token in tokens:
+            if f'${token}' in post_text_lower:
+                mentioned.append(token)
+        
+        # Then check for word-boundary matches
+        for token in tokens:
+            # Use regex to find whole-word matches
+            if re.search(r'\b' + token + r'\b', post_text_lower):
+                if token not in mentioned:  # Avoid duplicates
+                    mentioned.append(token)
+        
+        return mentioned
+    
+    def _get_reply_sentiment(self, reply_text: str) -> str:
+        """
+        Determine the sentiment of a reply (bullish, bearish, or neutral)
+        
+        Args:
+            reply_text: Reply text content
+            
+        Returns:
+            Sentiment as string ('bullish', 'bearish', or 'neutral')
+        """
+        # Bullish words
+        bullish_words = [
+            'bullish', 'bull', 'buy', 'long', 'moon', 'rally', 'pump', 'uptrend',
+            'breakout', 'strong', 'growth', 'profit', 'gain', 'higher', 'up',
+            'optimistic', 'momentum', 'support', 'bounce', 'surge', 'uptick'
+        ]
+        
+        # Bearish words
+        bearish_words = [
+            'bearish', 'bear', 'sell', 'short', 'dump', 'crash', 'correction',
+            'downtrend', 'weak', 'decline', 'loss', 'lower', 'down', 'pessimistic',
+            'resistance', 'fall', 'drop', 'slump', 'collapse', 'cautious'
+        ]
+        
+        # Count sentiment words
+        reply_lower = reply_text.lower()
+        
+        bullish_count = sum(1 for word in bullish_words if re.search(r'\b' + word + r'\b', reply_lower))
+        bearish_count = sum(1 for word in bearish_words if re.search(r'\b' + word + r'\b', reply_lower))
+        
+        # Check for negation that might flip sentiment
+        negation_words = ['not', 'no', 'never', 'doubt', 'unlikely', 'against']
+        for neg in negation_words:
+            for bull in bullish_words:
+                if f"{neg} {bull}" in reply_lower or f"{neg} really {bull}" in reply_lower:
+                    bullish_count -= 1
+                    bearish_count += 1
+            
+            for bear in bearish_words:
+                if f"{neg} {bear}" in reply_lower or f"{neg} really {bear}" in reply_lower:
+                    bearish_count -= 1
+                    bullish_count += 1
+        
+        # Determine overall sentiment
+        if bullish_count > bearish_count:
+            return 'bullish'
+        elif bearish_count > bullish_count:
+            return 'bearish'
+        else:
+            return 'neutral'
+    
+    def _capture_reply_metadata(self, post: Dict[str, Any], reply_text: str) -> Dict[str, Any]:
+        """
+        Capture metadata about a reply for analysis and tracking
+        
+        Args:
+            post: Original post data
+            reply_text: Generated reply text
+            
+        Returns:
+            Dictionary with metadata about the reply
+        """
+        # Extract mentioned tokens
+        tokens = self._extract_mentioned_tokens(reply_text)
+        
+        # Determine reply sentiment
+        sentiment = self._get_reply_sentiment(reply_text)
+        
+        # Count relevant metrics
+        char_count = len(reply_text)
+        word_count = len(reply_text.split())
+        
+        # Track replied topics
+        topics = []
+        if 'analysis' in post and 'topics' in post['analysis']:
+            topics = list(post['analysis']['topics'].keys())
+        
+        return {
+            'tokens': tokens,
+            'sentiment': sentiment,
+            'char_count': char_count,
+            'word_count': word_count,
+            'topics': topics,
+            'timestamp': datetime.now()
+        }
+
+    def _verify_reply_posted(self) -> bool:
+        """
+        Verify that a reply was successfully posted using multiple methods
+        
+        Returns:
+            True if verification succeeded, False otherwise
+        """
+        try:
+            # Method 1: Check if reply compose area is no longer visible
+            textarea_gone = False
+            for selector in self.reply_textarea_selectors:
+                try:
+                    WebDriverWait(self.browser.driver, 5).until_not(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    textarea_gone = True
+                    logger.logger.debug(f"Verified reply posted - textarea {selector} no longer visible")
+                    break
+                except TimeoutException:
+                    continue
+            
+            if textarea_gone:
+                return True
+            
+            # Method 2: Check if success indicators are present
+            success_indicators = [
+                '[data-testid="toast"]',  # Success toast notification
+                '[role="alert"]',         # Alert role that might indicate success
+                '.css-1dbjc4n[style*="background-color: rgba(0, 0, 0, 0)"]'  # Modal closed
+            ]
+            
+            for indicator in success_indicators:
+                try:
+                    WebDriverWait(self.browser.driver, 3).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, indicator))
+                    )
+                    logger.logger.debug(f"Verified reply posted - found success indicator: {indicator}")
+                    return True
+                except TimeoutException:
+                    continue
+            
+            # Method 3: Check if URL changed
+            current_url = self.browser.driver.current_url
+            if '/compose/' not in current_url:
+                logger.logger.debug("Verified reply posted - no longer on compose URL")
+                return True
+            
+            # Method 4: Check if send button is disabled or gone
+            for selector in self.reply_send_button_selectors:
+                try:
+                    # Check for disabled state
+                    send_buttons = self.browser.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if not send_buttons:
+                        logger.logger.debug(f"Verified reply posted - send button {selector} no longer present")
+                        return True
+                    
+                    # If button exists, check if it's disabled
+                    for button in send_buttons:
+                        aria_disabled = button.get_attribute('aria-disabled')
+                        is_disabled = button.get_attribute('disabled')
+                        if aria_disabled == 'true' or is_disabled == 'true':
+                            logger.logger.debug(f"Verified reply posted - send button is now disabled")
+                            return True
+                except Exception:
+                    continue
+            
+            # If we get here, no verification method succeeded
+            logger.logger.warning("Could not verify if reply was posted with any method")
+            
+            # Take screenshot for debugging
+            try:
+                debug_screenshot = f"reply_verification_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                self.browser.driver.save_screenshot(debug_screenshot)
+                logger.logger.debug(f"Saved verification debugging screenshot to {debug_screenshot}")
+            except Exception as e:
+                logger.logger.debug(f"Failed to save verification screenshot: {str(e)}")
+            
+            return False
+            
+        except Exception as e:
+            logger.logger.warning(f"Reply verification error: {str(e)}")
+            return False
+    
+    def _already_replied(self, post_id: str) -> bool:
+        """
+        Check if we've already replied to a post (memory cache)
+        
+        Args:
+            post_id: Unique identifier for the post
+            
+        Returns:
+            True if we've already replied, False otherwise
+        """
+        return post_id in self.recent_replies
+    
+    def _add_to_recent_replies(self, post_id: str) -> None:
+        """
+        Add a post ID to the recent replies list
+        
+        Args:
+            post_id: Unique identifier for the post
+        """
+        if post_id in self.recent_replies:
+            return
+            
+        self.recent_replies.append(post_id)
+        
+        # Keep the list at a reasonable size
+        if len(self.recent_replies) > self.max_recent_replies:
+            self.recent_replies.pop(0)  # Remove oldest entry
+    
+    def _extract_mentioned_tokens(self, post_text: str) -> List[str]:
+        """
+        Extract cryptocurrency token symbols mentioned in post text
+        
+        Args:
+            post_text: Text content of the post
+            
+        Returns:
+            List of token symbols found in the text
+        """
+        if not post_text:
+            return []
+        
+        # Common crypto tokens to look for
+        tokens = [
+            'btc', 'eth', 'sol', 'xrp', 'ada', 'dot', 'doge', 'shib', 'bnb',
+            'avax', 'matic', 'link', 'ltc', 'etc', 'bch', 'uni', 'atom'
+        ]
+        
+        # Look for both direct mentions and $-prefixed mentions
+        mentioned = []
+        post_text_lower = post_text.lower()
+        
+        # First check for $-prefixed tokens (stronger signal)
+        for token in tokens:
+            if f'${token}' in post_text_lower:
+                mentioned.append(token)
+        
+        # Then check for word-boundary matches
+        for token in tokens:
+            # Use regex to find whole-word matches
+            if re.search(r'\b' + token + r'\b', post_text_lower):
+                if token not in mentioned:  # Avoid duplicates
+                    mentioned.append(token)
+        
+        return mentioned
+    
+    def _get_reply_sentiment(self, reply_text: str) -> str:
+        """
+        Determine the sentiment of a reply (bullish, bearish, or neutral)
+        
+        Args:
+            reply_text: Reply text content
+            
+        Returns:
+            Sentiment as string ('bullish', 'bearish', or 'neutral')
+        """
+        # Bullish words
+        bullish_words = [
+            'bullish', 'bull', 'buy', 'long', 'moon', 'rally', 'pump', 'uptrend',
+            'breakout', 'strong', 'growth', 'profit', 'gain', 'higher', 'up',
+            'optimistic', 'momentum', 'support', 'bounce', 'surge', 'uptick'
+        ]
+        
+        # Bearish words
+        bearish_words = [
+            'bearish', 'bear', 'sell', 'short', 'dump', 'crash', 'correction',
+            'downtrend', 'weak', 'decline', 'loss', 'lower', 'down', 'pessimistic',
+            'resistance', 'fall', 'drop', 'slump', 'collapse', 'cautious'
+        ]
+        
+        # Count sentiment words
+        reply_lower = reply_text.lower()
+        
+        bullish_count = sum(1 for word in bullish_words if re.search(r'\b' + word + r'\b', reply_lower))
+        bearish_count = sum(1 for word in bearish_words if re.search(r'\b' + word + r'\b', reply_lower))
+        
+        # Check for negation that might flip sentiment
+        negation_words = ['not', 'no', 'never', 'doubt', 'unlikely', 'against']
+        for neg in negation_words:
+            for bull in bullish_words:
+                if f"{neg} {bull}" in reply_lower or f"{neg} really {bull}" in reply_lower:
+                    bullish_count -= 1
+                    bearish_count += 1
+            
+            for bear in bearish_words:
+                if f"{neg} {bear}" in reply_lower or f"{neg} really {bear}" in reply_lower:
+                    bearish_count -= 1
+                    bullish_count += 1
+        
+        # Determine overall sentiment
+        if bullish_count > bearish_count:
+            return 'bullish'
+        elif bearish_count > bullish_count:
+            return 'bearish'
+        else:
+            return 'neutral'
+    
+    def _capture_reply_metadata(self, post: Dict[str, Any], reply_text: str) -> Dict[str, Any]:
+        """
+        Capture metadata about a reply for analysis and tracking
+        
+        Args:
+            post: Original post data
+            reply_text: Generated reply text
+            
+        Returns:
+            Dictionary with metadata about the reply
+        """
+        # Extract mentioned tokens
+        tokens = self._extract_mentioned_tokens(reply_text)
+        
+        # Determine reply sentiment
+        sentiment = self._get_reply_sentiment(reply_text)
+        
+        # Count relevant metrics
+        char_count = len(reply_text)
+        word_count = len(reply_text.split())
+        
+        # Track replied topics
+        topics = []
+        if 'analysis' in post and 'topics' in post['analysis']:
+            topics = list(post['analysis']['topics'].keys())
+        
+        return {
+            'tokens': tokens,
+            'sentiment': sentiment,
+            'char_count': char_count,
+            'word_count': word_count,
+            'topics': topics,
+            'timestamp': datetime.now()
+        }    
