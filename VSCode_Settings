@@ -1,0 +1,33 @@
+{
+    // Python-specific settings
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": true,
+    "python.formatting.provider": "black",
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+
+    // Editor settings
+    "editor.formatOnSave": true,
+    "editor.rulers": [88, 120],
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true
+    },
+
+    // Workspace-specific settings
+    "files.watcherExclude": {
+        "**/venv/**": true,
+        "**/.git/objects/**": true
+    },
+
+    // Recommended extensions
+    "recommendations": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "visualstudioexptteam.vscodeintellicode"
+    ]
+}
