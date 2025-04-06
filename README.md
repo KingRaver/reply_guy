@@ -4,7 +4,7 @@
 [![Anthropic Claude](https://img.shields.io/badge/AI-Anthropic%20Claude-9cf)](https://www.anthropic.com/)
 [![CoinGecko API](https://img.shields.io/badge/API-CoinGecko-brightgreen)](https://www.coingecko.com/en/api)
 
-An advanced cryptocurrency analysis agent that leverages AI and market data to provide intelligent market insights, predictions, and social media engagement. The bot combines real-time market data with Anthropic's Claude AI to generate high-quality analysis across multiple timeframes.
+An advanced cryptocurrency analysis agent that leverages AI and market data to provide intelligent market insights, predictions, and social media engagement. The agent combines real-time market data with Anthropic's Claude AI to generate high-quality analysis across multiple timeframes.
 
 ## ✨ Features
 
