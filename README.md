@@ -42,7 +42,7 @@ An advanced cryptocurrency analysis agent that leverages AI and market data to p
 
 ## 🛠️ Technical Architecture
 
-![Architecture Overview](https://via.placeholder.com/800x400?text=CryptoAnalysisBot+Architecture)
+![Architecture Overview]((https://github.com/KingRaver/reply_guy/blob/main/architecture.txt))
 
 ### Core Components
 
