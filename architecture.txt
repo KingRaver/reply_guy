@@ -1,0 +1,60 @@
+drc/
+│
+├── .github/
+│   ├── workflows/
+│   │   ├── python-app.yml        # GitHub Actions workflow for CI/CD
+│   │   └── code-quality.yml      # Code quality checks
+│
+├── .vscode/
+│   ├── settings.json              # VSCode workspace settings
+│   ├── extensions.json            # Recommended VSCode extensions
+│   └── launch.json                # Debugging configurations
+│
+├── src/
+│   ├── __init__.py
+│   ├── bot.py
+│   ├── coingecko_handler.py
+│   ├── config.py
+│   ├── content_analyzer.py
+│   ├── database.py
+│   ├── meme_phrases.py
+│   ├── mood_config.py
+│   ├── prediction_engine.py
+│   ├── reply_handler.py
+│   ├── timeline_scraper.py
+│   └── utils/
+│       ├── __init__.py
+│       ├── browser.py
+│       ├── logger.py
+│       └── sheets_handler.py
+│
+├── data/
+│   ├── backup/
+│   │   └── crypto_history.db.bak
+│   └── crypto_history.db
+│
+├── logs/
+│   ├── analysis/
+│   │   └── market_analysis.log
+│   ├── eth_btc_correlation.log
+│   ├── drc.log
+│   ├── claude.log
+│   ├── coingecko.log
+│   └── google_sheets_api.log
+│
+├── tests/                         # Unit and integration tests
+│   ├── __init__.py
+│   ├── test_bot.py
+│   ├── test_coingecko_handler.py
+│   └── test_database.py
+│
+├── docs/                          # Project documentation
+│   ├── architecture.md
+│   └── setup_guide.md
+│
+├── .gitignore
+├── README.md
+├── CONTRIBUTING.md
+├── LICENSE
+├── requirements.txt
+└── setup.py
