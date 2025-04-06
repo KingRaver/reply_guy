@@ -73,7 +73,7 @@ An advanced cryptocurrency analysis agent that leverages AI and market data to p
 1. Clone the repository
    ```bash
    git clone https://github.com/kingraver/reply_guy.git
-   cd drc
+   cd reply_guy
    ```
 
 2. Install dependencies
