@@ -145,9 +145,9 @@ class CryptoAnalysisBot:
        
        # Reply tracking and control
        self.last_reply_check = datetime.now() - timedelta(minutes=30)  # Start checking soon
-       self.reply_check_interval = 60  # Check for posts to reply to every 60 minutes
+       self.reply_check_interval = 5  # Check for posts to reply to every 60 minutes
        self.max_replies_per_cycle = 10  # Maximum 10 replies per cycle
-       self.reply_cooldown = 20  # Minutes between reply cycles
+       self.reply_cooldown = 5  # Minutes between reply cycles
        self.last_reply_time = datetime.now() - timedelta(minutes=self.reply_cooldown)  # Allow immediate first run
        
        logger.log_startup()
@@ -662,10 +662,10 @@ class CryptoAnalysisBot:
            
        # Pick the most overdue timeframe
        chosen_timeframe = max(due_timeframes, 
-                             key=lambda tf: (datetime.now() - self.next_scheduled_posts.get(tf, datetime.min)).total_seconds())
+                             key=lambda tf: (datetime.now() - self._ensure_datetime(self.next_scheduled_posts.get(tf, datetime.min))).total_seconds())
        
        logger.logger.info(f"Selected {chosen_timeframe} for timeframe rotation posting")
-       
+
        # Choose best token for this timeframe
        token_to_post = self._select_best_token_for_timeframe(market_data, chosen_timeframe)
        
@@ -791,39 +791,46 @@ class CryptoAnalysisBot:
         Returns True if any replies were posted
         """
         now = datetime.now()
-        
+    
         # Check if it's time to look for posts to reply to
         time_since_last_check = (now - self.last_reply_check).total_seconds() / 60
         if time_since_last_check < self.reply_check_interval:
             logger.logger.debug(f"Skipping reply check, {time_since_last_check:.1f} minutes since last check (interval: {self.reply_check_interval})")
             return False
-            
+        
         # Also check cooldown period
         time_since_last_reply = (now - self.last_reply_time).total_seconds() / 60
         if time_since_last_reply < self.reply_cooldown:
             logger.logger.debug(f"In reply cooldown period, {time_since_last_reply:.1f} minutes since last reply (cooldown: {self.reply_cooldown})")
             return False
-            
+        
         logger.logger.info("Starting check for posts to reply to")
         self.last_reply_check = now
-        
+    
         try:
             # Scrape timeline for posts
             posts = self.timeline_scraper.scrape_timeline(count=self.max_replies_per_cycle * 2)  # Get more to filter
-            
+            logger.logger.info(f"Timeline scraping completed - found {len(posts) if posts else 0} posts")
+        
             if not posts:
                 logger.logger.warning("No posts found during timeline scraping")
                 return False
-                
-            logger.logger.info(f"Scraped {len(posts)} posts from timeline")
-            
+
+            # Log sample posts for debugging
+            for i, post in enumerate(posts[:3]):  # Log first 3 posts
+                logger.logger.info(f"Sample post {i}: {post.get('content', '')[:100]}...")
+
             # Find market-related posts
+            logger.logger.info(f"Finding market-related posts among {len(posts)} scraped posts")
             market_posts = self.content_analyzer.find_market_related_posts(posts)
-            logger.logger.info(f"Found {len(market_posts)} market-related posts")
+            logger.logger.info(f"Found {len(market_posts)} market-related posts, checking which ones need replies")
             
             # Filter out posts we've already replied to
             unreplied_posts = self.timeline_scraper.filter_already_replied_posts(market_posts)
             logger.logger.info(f"Found {len(unreplied_posts)} unreplied market-related posts")
+            if unreplied_posts:
+                for i, post in enumerate(unreplied_posts[:3]):
+                    logger.logger.info(f"Sample unreplied post {i}: {post.get('content', '')[:100]}...")
             
             if not unreplied_posts:
                 return False
@@ -835,11 +842,12 @@ class CryptoAnalysisBot:
             posts_to_reply = prioritized_posts[:self.max_replies_per_cycle]
             
             # Generate and post replies
+            logger.logger.info(f"Starting to reply to {len(posts_to_reply)} prioritized posts")
             successful_replies = self.reply_handler.reply_to_posts(posts_to_reply, market_data, max_replies=self.max_replies_per_cycle)
             
             if successful_replies > 0:
                 logger.logger.info(f"Successfully posted {successful_replies} replies")
-                self.last_reply_time = now
+                self.last_reply_time = now                    
                 return True
             else:
                 logger.logger.info("No replies were successfully posted")
@@ -893,6 +901,15 @@ class CryptoAnalysisBot:
            logger.log_shutdown()
        except Exception as e:
            logger.log_error("Cleanup", str(e))
+
+    def _ensure_datetime(self, value):
+        """Convert value to datetime if it's a string"""
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return datetime.min
+        return value
 
     def _get_crypto_data(self) -> Optional[Dict[str, Any]]:
        """Fetch crypto data from CoinGecko with retries"""
@@ -3368,7 +3385,7 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
             
             # Check if we should check for reply opportunities first
             # We'll do this with approximately 30% probability to balance original posts and replies
-            should_check_replies = random.random() < 0.3
+            should_check_replies = True  # Always check replies for testing
             if should_check_replies:
                 logger.logger.info("Checking for reply opportunities first")
                 if self._check_for_reply_opportunities(market_data):
@@ -3574,361 +3591,4 @@ if __name__ == "__main__":
         bot = CryptoAnalysisBot()
         bot.start()
     except Exception as e:
-        logger.log_error("Bot Startup", str(e))                     
-            
-            # Sort topics and tokens by frequency
-            trending_topics = sorted(all_topics.items(), key=lambda x: x[1], reverse=True)
-            trending_tokens = sorted(all_tokens.items(), key=lambda x: x[1], reverse=True)
-            
-            # Calculate overall market sentiment
-            total_sentiment = sum(sentiment_counts.values())
-            if total_sentiment > 0:
-                market_sentiment = {
-                    'bullish': sentiment_counts['bullish'] / total_sentiment * 100,
-                    'bearish': sentiment_counts['bearish'] / total_sentiment * 100,
-                    'neutral': sentiment_counts['neutral'] / total_sentiment * 100
-                }
-                
-                # Determine primary sentiment
-                primary_sentiment = max(market_sentiment, key=market_sentiment.get)
-            else:
-                market_sentiment = {'bullish': 0, 'bearish': 0, 'neutral': 100}
-                primary_sentiment = 'neutral'
-            
-            return {
-                'trending_topics': trending_topics[:10],
-                'trending_tokens': trending_tokens[:10],
-                'sentiment_counts': sentiment_counts,
-                'market_sentiment': market_sentiment,
-                'primary_sentiment': primary_sentiment
-            }
-            
-        except Exception as e:
-            logger.log_error("Identify Trending Market Topics", str(e))
-            return {
-                'trending_topics': [],
-                'trending_tokens': [],
-                'sentiment_counts': {'bullish': 0, 'bearish': 0, 'neutral': 0},
-                'market_sentiment': {'bullish': 0, 'bearish': 0, 'neutral': 100},
-                'primary_sentiment': 'neutral'
-            }
-    
-    def post_market_sentiment_update(self, market_data: Dict[str, Any]) -> bool:
-        """
-        Post an update about market sentiment based on timeline analysis
-        
-        Args:
-            market_data: Market data from CoinGecko
-            
-        Returns:
-            True if post was successful, False otherwise
-        """
-        try:
-            # Identify trending topics
-            market_trends = self.identify_trending_market_topics()
-            
-            if not market_trends['trending_topics'] and not market_trends['trending_tokens']:
-                logger.logger.warning("No significant market trends identified")
-                return False
-            
-            # Build update text
-            sentiment = market_trends['primary_sentiment']
-            sentiment_emoji = "📈" if sentiment == 'bullish' else "📉" if sentiment == 'bearish' else "➡️"
-            
-            update_text = f"X MARKET SENTIMENT UPDATE {sentiment_emoji}\n\n"
-            
-            # Add sentiment breakdown
-            sentiment_pcts = market_trends['market_sentiment']
-            update_text += f"Current sentiment: {sentiment_pcts['bullish']:.1f}% bullish, "
-            update_text += f"{sentiment_pcts['bearish']:.1f}% bearish, "
-            update_text += f"{sentiment_pcts['neutral']:.1f}% neutral\n\n"
-            
-            # Add trending topics
-            if market_trends['trending_topics']:
-                update_text += "Trending topics:\n"
-                for topic, score in market_trends['trending_topics'][:5]:
-                    update_text += f"- {topic}\n"
-                update_text += "\n"
-            
-            # Add trending tokens with price data
-            if market_trends['trending_tokens']:
-                update_text += "Trending tokens:\n"
-                for token, count in market_trends['trending_tokens'][:5]:
-                    token_upper = token.upper()
-                    if token_upper in market_data:
-                        price = market_data[token_upper]['current_price']
-                        change = market_data[token_upper]['price_change_percentage_24h']
-                        update_text += f"- #{token_upper}: ${price:.4f} ({change:+.2f}%)\n"
-                    else:
-                        update_text += f"- #{token_upper}\n"
-                        
-            # Add prediction context if available
-            top_tokens = [t[0].upper() for t in market_trends['trending_tokens'][:3]]
-            prediction_added = False
-            
-            for token in top_tokens:
-                # Get most recent prediction for any timeframe
-                token_prediction = None
-                for timeframe in self.timeframes:
-                    if token in self.timeframe_predictions.get(timeframe, {}):
-                        token_prediction = {
-                            'data': self.timeframe_predictions[timeframe][token],
-                            'timeframe': timeframe
-                        }
-                        break
-                
-                if token_prediction:
-                    if not prediction_added:
-                        update_text += "\nLatest prediction:\n"
-                        prediction_added = True
-                        
-                    pred_data = token_prediction['data'].get('prediction', {})
-                    timeframe = token_prediction['timeframe']
-                    
-                    price = pred_data.get('price', 0)
-                    percent_change = pred_data.get('percent_change', 0)
-                    
-                    update_text += f"#{token} {timeframe}: ${price:.4f} ({percent_change:+.2f}%)\n"
-                    break  # Only add one prediction for brevity
-            
-            # Post the update
-            if self._post_analysis(update_text, timeframe="sentiment"):
-                logger.logger.info("Posted market sentiment update")
-                
-                # Store in database
-                storage_data = {
-                    'content': update_text,
-                    'sentiment': {'market': sentiment},
-                    'trigger_type': 'sentiment_update',
-                    'price_data': {},
-                    'meme_phrases': {},
-                    'timeframe': 'sentiment'
-                }
-                
-                self.config.db.store_posted_content(**storage_data)
-                return True
-            else:
-                logger.logger.error("Failed to post market sentiment update")
-                return False
-            
-        except Exception as e:
-            logger.log_error("Post Market Sentiment Update", str(e))
-            return False
-
-    def refresh_market_data(self) -> Dict[str, Any]:
-        """
-        Refresh market data and update predictions for active tokens
-        
-        Returns:
-            Updated market data
-        """
-        try:
-            # Get fresh market data
-            market_data = self._get_crypto_data()
-            if not market_data:
-                logger.logger.error("Failed to refresh market data")
-                return {}
-            
-            # Get trending tokens
-            trending_analysis = self.identify_trending_market_topics()
-            trending_tokens = [t[0].upper() for t in trending_analysis.get('trending_tokens', [])]
-            
-            # Determine tokens to refresh predictions for
-            tokens_to_refresh = set()
-            
-            # Add trending tokens
-            tokens_to_refresh.update(trending_tokens[:5])
-            
-            # Add tokens with existing predictions
-            for timeframe in self.timeframes:
-                tokens_to_refresh.update(self.timeframe_predictions.get(timeframe, {}).keys())
-            
-            # Limit to tokens with market data
-            tokens_to_refresh = [t for t in tokens_to_refresh if t in market_data]
-            
-            # Refresh predictions for selected tokens
-            for token in tokens_to_refresh:
-                self._queue_predictions_for_all_timeframes(token, market_data)
-            
-            logger.logger.info(f"Refreshed market data and queued predictions for {len(tokens_to_refresh)} tokens")
-            return market_data
-            
-        except Exception as e:
-            logger.log_error("Refresh Market Data", str(e))
-            return {}
-    
-    def run_reply_cycles(self) -> None:
-        """
-        Run all reply cycles in sequence
-        """
-        try:
-            # Check if it's time to run reply cycles
-            if not self._should_run_reply_cycle():
-                return
-                
-            logger.logger.info("Running all reply cycles")
-            
-            # Refresh market data
-            market_data = self.refresh_market_data()
-            if not market_data:
-                logger.logger.error("Failed to get market data for reply cycles")
-                return
-            
-            # 1. Run the main reply cycle
-            main_cycle_success = self.run_reply_cycle()
-            
-            # 2. Answer market questions with a smaller limit
-            question_replies = self.answer_market_questions(market_data, max_replies=2)
-            
-            # 3. Share predictions for relevant posts
-            prediction_replies = self.reply_with_predictions(market_data, max_replies=2)
-            
-            # 4. Check trending topics and post sentiment update (less frequently)
-            hours_since_trend = (datetime.now() - self.last_trend_check_time).total_seconds() / 3600
-            if hours_since_trend >= self.trend_check_interval_hours:
-                self.post_market_sentiment_update(market_data)
-                self.last_trend_check_time = datetime.now()
-            
-            # 5. Check engagement for previous replies
-            self.check_reply_engagement(max_replies=5)
-            
-            # Update last reply time
-            self.last_reply_time = datetime.now()
-            
-            logger.logger.info(
-                f"Completed reply cycles - Main: {main_cycle_success}, "
-                f"Questions: {question_replies}, Predictions: {prediction_replies}"
-            )
-            
-        except Exception as e:
-            logger.log_error("Run Reply Cycles", str(e))
-    
-    def _initialize_reply_database(self) -> None:
-        """
-        Initialize database tables for reply tracking if they don't exist
-        """
-        if not self.config.db:
-            logger.logger.warning("No database connection available for reply tracking")
-            return
-            
-        conn, cursor = self.config.db._get_connection()
-        
-        try:
-            # Table for tracking replied-to posts
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS replied_posts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    post_id TEXT NOT NULL,
-                    post_url TEXT,
-                    post_author TEXT,
-                    post_text TEXT,
-                    reply_text TEXT,
-                    reply_time DATETIME NOT NULL,
-                    market_related BOOLEAN DEFAULT 0,
-                    reply_type TEXT,
-                    engagement_data JSON
-                )
-            """)
-            
-            # Table for tracking reply performance
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS reply_performance (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    post_id TEXT NOT NULL,
-                    reply_id INTEGER,
-                    likes INTEGER DEFAULT 0,
-                    replies INTEGER DEFAULT 0,
-                    reposts INTEGER DEFAULT 0,
-                    check_time DATETIME NOT NULL,
-                    FOREIGN KEY (reply_id) REFERENCES replied_posts(id)
-                )
-            """)
-            
-            # Table for tracking market accounts
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS market_accounts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    account_handle TEXT NOT NULL UNIQUE,
-                    account_name TEXT,
-                    account_category TEXT,
-                    follower_count INTEGER,
-                    last_engagement_score REAL,
-                    last_checked DATETIME,
-                    active BOOLEAN DEFAULT 1
-                )
-            """)
-            
-            # Table for tracking content analysis results
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS content_analysis (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    post_id TEXT NOT NULL,
-                    post_url TEXT,
-                    post_author TEXT,
-                    market_relevance REAL,
-                    sentiment TEXT,
-                    sentiment_score REAL,
-                    mentioned_tokens TEXT,
-                    topics TEXT,
-                    analysis_time DATETIME NOT NULL,
-                    raw_analysis JSON
-                )
-            """)
-            
-            # Create indices
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_replied_posts_post_id ON replied_posts(post_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_replied_posts_author ON replied_posts(post_author)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_replied_posts_time ON replied_posts(reply_time)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_reply_performance_post_id ON reply_performance(post_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_accounts_handle ON market_accounts(account_handle)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_analysis_post_id ON content_analysis(post_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_analysis_author ON content_analysis(post_author)")
-            
-            conn.commit()
-            logger.logger.info("Reply database tables initialized")
-            
-        except Exception as e:
-            logger.log_error("Initialize Reply Database", str(e))
-            conn.rollback()
-            
-    def _cleanup_reply_resources(self) -> None:
-        """Cleanup reply-specific resources"""
-        try:
-            # Store reply statistics
-            if self.config.db:
-                reply_stats_data = {
-                    'timestamp': datetime.now().isoformat(),
-                    'stats': self.reply_stats
-                }
-                
-                # Use the generic JSON storage method
-                self.config.db._store_json_data(
-                    data_type="reply_stats",
-                    data=reply_stats_data
-                )
-                
-                logger.logger.debug("Stored reply statistics in database")
-                
-        except Exception as e:
-            logger.log_error("Cleanup Reply Resources", str(e))
-
-    def _cleanup(self) -> None:
-        """Override of base class cleanup to include reply-specific resources"""
-        try:
-            # Clean up reply resources
-            self._cleanup_reply_resources()
-            
-            # Call the base class cleanup
-            super()._cleanup()
-            
-        except Exception as e:
-            logger.log_error("Cleanup", str(e))
-
-# Main entry point
-if __name__ == "__main__":
-    try:
-        # Use the intelligent reply bot instead of the base bot
-        bot = IntelligentReplyBot()
-        bot.start()
-    except Exception as e:
-        logger.log_error("Bot Startup", str(e))                    
+        logger.log_error("Bot Startup", str(e))                                        
