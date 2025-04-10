@@ -1522,4 +1522,271 @@ Your response should be conversational, helpful and tailored to the post. Do not
             
         return relevant_tokens
         
-    def find_market_
+    def find_market_related_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter posts to only include those related to markets with enhanced detection
+        
+        Args:
+            posts: List of post data dictionaries
+            
+        Returns:
+            Filtered list of market-related posts
+        """
+        if not posts:
+            logger.logger.warning("No posts provided to filter for market relevance")
+            return []
+            
+        logger.logger.info(f"Filtering {len(posts)} posts for market relevance")
+        
+        # Flatten the keywords for efficient matching
+        all_keywords = []
+        for category in self.market_keywords.values():
+            all_keywords.extend(category)
+        
+        # Store matched posts with their relevance score
+        market_related = []
+        
+        for post in posts:
+            post_text = post.get('text', '').lower() if post.get('text') else ''
+            
+            # Skip posts with no text
+            if not post_text:
+                continue
+                
+            # Track matched keywords for logging
+            matched_keywords = []
+            keyword_categories = set()
+            
+            # Basic keyword matching with categorization
+            for category, keywords in self.market_keywords.items():
+                for keyword in keywords:
+                    if keyword in post_text:
+                        matched_keywords.append(keyword)
+                        keyword_categories.add(category)
+            
+            # Price pattern matching (e.g., "$45.2K" or "45,000 USDT")
+            price_patterns = [
+                r'\$\d+[,.]?\d*[KMB]?',  # $45K, $45.2K
+                r'\d+[,.]?\d*\s*[$€£¥]',  # 45.2 $, 45,000 €
+                r'\d+[,.]?\d*\s*usdt',    # 45000 USDT
+                r'\d+[,.]?\d*\s*usd',     # 45000 USD
+                r'\d+[,.]\d*\s*eth',      # 0.05 ETH
+                r'\d+[,.]\d*\s*btc'       # 0.01 BTC
+            ]
+            
+            for pattern in price_patterns:
+                if re.search(pattern, post_text, re.IGNORECASE):
+                    matched_keywords.append("price_pattern")
+                    keyword_categories.add('finance')
+                    break
+            
+            # Percentage change patterns
+            percentage_patterns = [
+                r'[+-]?\d+(\.\d+)?%',         # +5%, -10.5%
+                r'up\s+\d+(\.\d+)?%',         # up 5%
+                r'down\s+\d+(\.\d+)?%',       # down 10.5%
+                r'gained\s+\d+(\.\d+)?%',     # gained 5%
+                r'lost\s+\d+(\.\d+)?%',       # lost 10.5%
+                r'increased\s+\d+(\.\d+)?%',  # increased 5%
+                r'decreased\s+\d+(\.\d+)?%',  # decreased 10.5%
+            ]
+            
+            for pattern in percentage_patterns:
+                if re.search(pattern, post_text, re.IGNORECASE):
+                    matched_keywords.append("percentage_change")
+                    keyword_categories.add('finance')
+                    break
+                    
+            # Also check hashtags if available
+            if 'content_analysis' in post and 'hashtags' in post['content_analysis']:
+                hashtags = post['content_analysis']['hashtags']
+                for tag in hashtags:
+                    tag = tag.lower()
+                    if any(keyword in tag for keyword in all_keywords):
+                        matched_keywords.append(f"hashtag:{tag}")
+                        # Determine category of the hashtag
+                        for cat, keywords in self.market_keywords.items():
+                            if any(keyword in tag for keyword in keywords):
+                                keyword_categories.add(cat)
+            
+            # Calculate relevance score based on matches
+            relevance_score = 0
+            
+            # Base score from number of matches
+            relevance_score += min(10, len(matched_keywords))
+            
+            # Bonus for matching multiple categories
+            relevance_score += len(keyword_categories) * 3
+            
+            # Bonus for having both crypto and finance terms (high relevance)
+            if 'crypto' in keyword_categories and 'finance' in keyword_categories:
+                relevance_score += 5
+            
+            # Mark as market related if we found any matches and score is high enough
+            if matched_keywords and relevance_score >= 3:
+                # Add relevant fields to the post
+                post['market_related'] = True
+                post['market_keywords'] = matched_keywords
+                post['market_categories'] = list(keyword_categories)
+                post['market_relevance_score'] = relevance_score
+                market_related.append(post)
+                
+        logger.logger.info(f"Found {len(market_related)} market-related posts out of {len(posts)}")
+        
+        # Log some example keywords for debugging
+        if market_related:
+            examples = [p.get('market_keywords', [])[:3] for p in market_related[:3]]
+            logger.logger.debug(f"Example keywords matched: {examples}")
+        
+        # Sort by relevance score (highest first)
+        market_related.sort(key=lambda x: x.get('market_relevance_score', 0), reverse=True)
+        
+        return market_related
+
+    def filter_already_replied_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter out posts we've already replied to. Handles missing database methods gracefully.
+        
+        Args:
+            posts: List of post data dictionaries
+            
+        Returns:
+            Filtered list of posts
+        """
+        if not posts:
+            logger.logger.warning("No posts provided to filter for replies")
+            return []
+            
+        logger.logger.info(f"Filtering {len(posts)} posts for ones we haven't replied to yet")
+        
+        filtered_posts = []
+        
+        for post in posts:
+            post_id = post.get('post_id')
+            post_url = post.get('post_url')
+            
+            # Skip posts with no ID or URL
+            if not post_id and not post_url:
+                continue
+            
+            # Check if we've already replied to this post
+            already_replied = False
+            
+            try:
+                # Try using the database method if it exists
+                if self.db and hasattr(self.db, 'check_if_post_replied'):
+                    already_replied = self.db.check_if_post_replied(post_id, post_url)
+                else:
+                    # Fallback method if database function doesn't exist
+                    already_replied = self._check_if_post_replied_fallback(post_id, post_url)
+            except Exception as e:
+                logger.logger.warning(f"Error checking if post was replied to: {str(e)}")
+                # Fall back to checking locally
+                already_replied = False
+            
+            if not already_replied:
+                filtered_posts.append(post)
+        
+        logger.logger.info(f"Filtered out {len(posts) - len(filtered_posts)} already replied posts")
+        return filtered_posts
+    
+    def _check_if_post_replied_fallback(self, post_id: str, post_url: str) -> bool:
+        """
+        Fallback method to check if a post has been replied to when database method is unavailable
+        
+        Args:
+            post_id: The ID of the post
+            post_url: The URL of the post
+            
+        Returns:
+            True if we've replied to this post, False otherwise
+        """
+        # Without proper database support, we assume not replied
+        # This is a placeholder for a proper implementation
+        
+        # In a real implementation, we could check:
+        # 1. Local memory cache of replied posts
+        # 2. Simple file-based storage of previously replied posts
+        # 3. Scrape the post page to see if our account has replied
+        
+        return False
+
+    def prioritize_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Sort posts by engagement level, relevance, recency
+        
+        Args:
+            posts: List of post data dictionaries
+            
+        Returns:
+            Sorted list of posts by priority score
+        """
+        if not posts:
+            return []
+            
+        logger.logger.info(f"Prioritizing {len(posts)} posts by engagement, relevance, and recency")
+        
+        # Calculate a priority score for each post
+        scored_posts = []
+        now = self._strip_timezone(datetime.now())
+        
+        for post in posts:
+            try:
+                # Base score starts at 0
+                score = 0
+                
+                # Factor 1: Engagement score (0-50 points)
+                engagement = min(100, post.get('engagement_score', 0))
+                score += engagement * 0.5  # Up to 50 points
+                
+                # Factor 2: Recency (0-30 points)
+                timestamp = post.get('timestamp')
+                if timestamp:
+                    # Convert to naive datetime for comparison
+                    timestamp = self._strip_timezone(timestamp)
+                    # Calculate hours since posted
+                    hours_ago = (now - timestamp).total_seconds() / 3600
+                    
+                    # More recent posts get higher scores (inverse relationship)
+                    recency_score = max(0, 30 - (hours_ago * 2.5))  # Lose 2.5 points per hour, max 30
+                    score += recency_score
+                
+                # Factor 3: Market relevance (0-30 points)
+                # Use the market_relevance_score if available
+                relevance = min(30, post.get('market_relevance_score', 0) * 2)
+                score += relevance
+                
+                # Factor 4: Has question (bonus 10 points)
+                # Questions are good opportunities for helpful replies
+                if post.get('content_analysis', {}).get('has_question', False):
+                    score += 10
+                    
+                # Factor 5: Media content (bonus 5 points)
+                # Posts with media often get more engagement
+                if post.get('has_media', {}).get('has_any_media', False):
+                    score += 5
+                    
+                # Store score with post
+                post['priority_score'] = score
+                scored_posts.append(post)
+            
+            except Exception as e:
+                # If there's an error scoring this post, still include it with a default score
+                logger.logger.warning(f"Error scoring post: {e}")
+                post['priority_score'] = 0
+                scored_posts.append(post)
+        
+        # Sort by priority score (highest first)
+        sorted_posts = sorted(scored_posts, key=lambda x: x.get('priority_score', 0), reverse=True)
+        
+        # Log top priority posts
+        if sorted_posts:
+            top_posts = sorted_posts[:3]
+            logger.logger.info("Top priority posts:")
+            for i, post in enumerate(top_posts):
+                preview = post.get('text', '')[:50]
+                if len(post.get('text', '')) > 50:
+                    preview += "..."
+                logger.logger.info(f"  {i+1}. Score: {post.get('priority_score', 0):.1f} - {preview}")
+        
+        return sorted_posts
