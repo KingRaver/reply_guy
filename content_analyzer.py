@@ -1034,4 +1034,4 @@ class ContentAnalyzer:
             
         except Exception as e:
             logger.log_error("Related Topics Analysis", str(e))
-            return {}            
+            return {}                      
