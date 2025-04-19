@@ -1,4 +1,4 @@
-thc/
+xtc/
 │
 ├── .github/
 │   └── workflows/
@@ -37,7 +37,7 @@ thc/
 │   ├── analysis/
 │   │   └── market_analysis.log   # Market analysis logs
 │   ├── eth_btc_correlation.log   # Ethereum-Bitcoin correlation logs
-│   ├── drc.log                   # DRC logs
+│   ├── xtc.log                   # DRC logs
 │   ├── claude.log                # Claude AI integration logs
 │   ├── coingecko.log             # CoinGecko API logs
 │   └── google_sheets_api.log     # Google Sheets API logs
