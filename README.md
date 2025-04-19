@@ -159,8 +159,8 @@ The system features a flexible, provider-agnostic language model integration:
 
 1. Clone the repository
    ```bash
-   git clone https://github.com/yourusername/tokenetics-market-oracle.git
-   cd tokenetics-market-oracle
+   git clone https://github.com/kingraver/reply_guy.git
+   cd reply_guy
    ```
 
 2. Install dependencies
