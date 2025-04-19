@@ -6,7 +6,7 @@ import time
 import random
 import re
 from datetime import datetime
-import anthropic
+from datetime_utils import ensure_naive_datetimes, strip_timezone, safe_datetime_diff
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -29,28 +29,28 @@ class ReplyHandler:
     Handler for generating and posting replies to timeline posts
     """
     
-    def __init__(self, browser, config, claude_client, coingecko=None, db=None):
+    def __init__(self, browser, config, llm_provider, coingecko=None, db=None):
         """
         Initialize the reply handler with multiple selectors for resilience
-        
+    
         Args:
             browser: Browser instance for web interaction
             config: Configuration instance containing settings
-            claude_client: Claude API client for generating replies
+            llm_provider: LLM provider for generating replies
             coingecko: CoinGecko handler for market data (optional)
             db: Database instance for storing reply data (optional)
         """
         self.browser = browser
         self.config = config
-        self.claude_client = claude_client
+        self.llm_provider = llm_provider
         self.coingecko = coingecko
         self.db = db
-        
+    
+        # Configure retry settings
         self.max_retries = 3
         self.retry_delay = 5
-        self.claude_model = "claude-3-7-sonnet-20250219"  # Using the latest model
         self.max_tokens = 300
-        
+    
         # Multiple selectors for each element type to increase resilience
         self.reply_button_selectors = [
             '[data-testid="reply"]',
@@ -59,7 +59,7 @@ class ReplyHandler:
             'div[role="button"][aria-label*="Reply"]',
             'div[aria-label*="Reply"]'
         ]
-        
+    
         self.reply_textarea_selectors = [
             '[data-testid="tweetTextarea_0"]',
             '[data-testid*="tweetTextarea"]',
@@ -67,7 +67,7 @@ class ReplyHandler:
             'div[role="textbox"]',
             'div.DraftEditor-root'
         ]
-        
+    
         self.reply_send_button_selectors = [
             '[data-testid="tweetButton"]',
             'button[data-testid="tweetButton"]',
@@ -75,16 +75,32 @@ class ReplyHandler:
             'div[role="button"]:has-text("Post")',
             'button[type="submit"]'
         ]
-        
+    
         # Track posts we've recently replied to (in-memory cache)
         self.recent_replies = []
         self.max_recent_replies = 100
-        
+    
         logger.logger.info("Reply handler initialized")
 
+    def _strip_timezone(self, dt):
+        """Helper method to convert datetime to naive"""
+        if dt is None:
+            return dt
+        if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+            # Convert to UTC then remove tzinfo
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+
+    def _safe_datetime_diff(self, dt1, dt2):
+        """Safely calculate time difference between two datetime objects in seconds"""
+        dt1 = self._strip_timezone(dt1)
+        dt2 = self._strip_timezone(dt2)
+        return (dt1 - dt2).total_seconds()
+
+    @ensure_naive_datetimes
     def generate_reply(self, post: Dict[str, Any], market_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """
-        Generate a witty market-related reply using Claude API
+        Generate a witty market-related reply using LLM provider
         
         Args:
             post: Post data dictionary
@@ -145,7 +161,7 @@ class ReplyHandler:
             market_topics = self._detect_market_topics(post_text)
             logger.logger.debug(f"Detected market topics: {market_topics}")
             
-            # Build the prompt for Claude
+            # Build the prompt for the LLM
             prompt = f"""You are an intelligent, witty crypto/market commentator replying to posts on social media. 
 You specialize in providing informative but humorous replies about cryptocurrency and financial markets.
 
@@ -171,17 +187,13 @@ Your task is to write a brief, intelligent, witty reply with a hint of market kn
 Your reply (maximum 240 characters):
 """
 
-            # Generate reply using Claude
-            logger.logger.debug(f"Sending prompt to Claude for reply generation")
-            response = self.claude_client.messages.create(
-                model=self.claude_model,
-                max_tokens=self.max_tokens,
-                messages=[{"role": "user", "content": prompt}]
-            )
+            # Generate reply using LLM provider instead of direct Claude API
+            logger.logger.debug(f"Sending prompt to LLM provider for reply generation")
+            reply_text = self.llm_provider.generate_text(prompt, max_tokens=self.max_tokens)
             
-            # Extract reply text
-            reply_text = response.content[0].text.strip()
-            logger.logger.debug(f"Raw Claude response: '{reply_text[:100]}...'")
+            if not reply_text:
+                logger.logger.warning("LLM provider returned empty response")
+                return None
             
             # Make sure the reply isn't too long for Twitter (240 chars max)
             if len(reply_text) > 240:
@@ -208,7 +220,7 @@ Your reply (maximum 240 characters):
         except Exception as e:
             logger.log_error("Reply Generation", str(e))
             
-            # Fallback replies if Claude API fails
+            # Fallback replies if LLM provider fails
             fallback_replies = [
                 "Interesting perspective on the market. The data seems to tell a different story though.",
                 "Not sure if I agree with this take. Market fundamentals suggest otherwise.",
@@ -217,7 +229,54 @@ Your reply (maximum 240 characters):
                 "I see your point, but have you considered the broader market implications?"
             ]
             return random.choice(fallback_replies)
+
+    def reply_to_posts(self, posts: List[Dict[str, Any]], market_data: Optional[Dict[str, Any]] = None, max_replies: int = 5) -> int:
+        """
+        Generate and post replies to a list of posts
     
+        Args:
+            posts: List of post data dictionaries
+            market_data: Market data for context
+            max_replies: Maximum number of replies to post
+        
+        Returns:
+            Number of successful replies
+        """
+        if not posts:
+            logger.logger.info("No posts to reply to")
+            return 0
+        
+        successful_replies = 0
+    
+        for post in posts[:max_replies]:
+            try:
+                # Generate reply
+                reply_text = self.generate_reply(post, market_data)
+            
+                if not reply_text:
+                    logger.logger.warning(f"Failed to generate reply for post by {post.get('author_handle', 'unknown')}")
+                    continue
+                
+                # Post the reply
+                if self.post_reply(post, reply_text):
+                    successful_replies += 1
+                
+                    # Capture metadata
+                    metadata = self._capture_reply_metadata(post, reply_text)
+                    logger.logger.debug(f"Reply metadata: {metadata}")
+                
+                    # Allow some time between replies to avoid rate limiting
+                    if successful_replies < max_replies:
+                        time.sleep(random.uniform(5, 10))
+                else:
+                    logger.logger.warning(f"Failed to post reply to {post.get('author_handle', 'unknown')}")
+                
+            except Exception as e:
+                logger.log_error("Reply to Post", str(e))
+                continue
+            
+        return successful_replies
+
     def _detect_market_topics(self, text: str) -> List[str]:
         """
         Detect market-related topics in the post text
@@ -831,239 +890,5 @@ Your reply (maximum 240 characters):
             'char_count': char_count,
             'word_count': word_count,
             'topics': topics,
-            'timestamp': datetime.now()
-        }
-
-    def _verify_reply_posted(self) -> bool:
-        """
-        Verify that a reply was successfully posted using multiple methods
-        
-        Returns:
-            True if verification succeeded, False otherwise
-        """
-        try:
-            # Method 1: Check if reply compose area is no longer visible
-            textarea_gone = False
-            for selector in self.reply_textarea_selectors:
-                try:
-                    WebDriverWait(self.browser.driver, 5).until_not(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                    )
-                    textarea_gone = True
-                    logger.logger.debug(f"Verified reply posted - textarea {selector} no longer visible")
-                    break
-                except TimeoutException:
-                    continue
-            
-            if textarea_gone:
-                return True
-            
-            # Method 2: Check if success indicators are present
-            success_indicators = [
-                '[data-testid="toast"]',  # Success toast notification
-                '[role="alert"]',         # Alert role that might indicate success
-                '.css-1dbjc4n[style*="background-color: rgba(0, 0, 0, 0)"]'  # Modal closed
-            ]
-            
-            for indicator in success_indicators:
-                try:
-                    WebDriverWait(self.browser.driver, 3).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, indicator))
-                    )
-                    logger.logger.debug(f"Verified reply posted - found success indicator: {indicator}")
-                    return True
-                except TimeoutException:
-                    continue
-            
-            # Method 3: Check if URL changed
-            current_url = self.browser.driver.current_url
-            if '/compose/' not in current_url:
-                logger.logger.debug("Verified reply posted - no longer on compose URL")
-                return True
-            
-            # Method 4: Check if send button is disabled or gone
-            for selector in self.reply_send_button_selectors:
-                try:
-                    # Check for disabled state
-                    send_buttons = self.browser.driver.find_elements(By.CSS_SELECTOR, selector)
-                    if not send_buttons:
-                        logger.logger.debug(f"Verified reply posted - send button {selector} no longer present")
-                        return True
-                    
-                    # If button exists, check if it's disabled
-                    for button in send_buttons:
-                        aria_disabled = button.get_attribute('aria-disabled')
-                        is_disabled = button.get_attribute('disabled')
-                        if aria_disabled == 'true' or is_disabled == 'true':
-                            logger.logger.debug(f"Verified reply posted - send button is now disabled")
-                            return True
-                except Exception:
-                    continue
-            
-            # If we get here, no verification method succeeded
-            logger.logger.warning("Could not verify if reply was posted with any method")
-            
-            # Take screenshot for debugging
-            try:
-                debug_screenshot = f"reply_verification_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                self.browser.driver.save_screenshot(debug_screenshot)
-                logger.logger.debug(f"Saved verification debugging screenshot to {debug_screenshot}")
-            except Exception as e:
-                logger.logger.debug(f"Failed to save verification screenshot: {str(e)}")
-            
-            return False
-            
-        except Exception as e:
-            logger.logger.warning(f"Reply verification error: {str(e)}")
-            return False
-    
-    def _already_replied(self, post_id: str) -> bool:
-        """
-        Check if we've already replied to a post (memory cache)
-        
-        Args:
-            post_id: Unique identifier for the post
-            
-        Returns:
-            True if we've already replied, False otherwise
-        """
-        return post_id in self.recent_replies
-    
-    def _add_to_recent_replies(self, post_id: str) -> None:
-        """
-        Add a post ID to the recent replies list
-        
-        Args:
-            post_id: Unique identifier for the post
-        """
-        if post_id in self.recent_replies:
-            return
-            
-        self.recent_replies.append(post_id)
-        
-        # Keep the list at a reasonable size
-        if len(self.recent_replies) > self.max_recent_replies:
-            self.recent_replies.pop(0)  # Remove oldest entry
-    
-    def _extract_mentioned_tokens(self, post_text: str) -> List[str]:
-        """
-        Extract cryptocurrency token symbols mentioned in post text
-        
-        Args:
-            post_text: Text content of the post
-            
-        Returns:
-            List of token symbols found in the text
-        """
-        if not post_text:
-            return []
-        
-        # Common crypto tokens to look for
-        tokens = [
-            'btc', 'eth', 'sol', 'xrp', 'ada', 'dot', 'doge', 'shib', 'bnb',
-            'avax', 'matic', 'link', 'ltc', 'etc', 'bch', 'uni', 'atom'
-        ]
-        
-        # Look for both direct mentions and $-prefixed mentions
-        mentioned = []
-        post_text_lower = post_text.lower()
-        
-        # First check for $-prefixed tokens (stronger signal)
-        for token in tokens:
-            if f'${token}' in post_text_lower:
-                mentioned.append(token)
-        
-        # Then check for word-boundary matches
-        for token in tokens:
-            # Use regex to find whole-word matches
-            if re.search(r'\b' + token + r'\b', post_text_lower):
-                if token not in mentioned:  # Avoid duplicates
-                    mentioned.append(token)
-        
-        return mentioned
-    
-    def _get_reply_sentiment(self, reply_text: str) -> str:
-        """
-        Determine the sentiment of a reply (bullish, bearish, or neutral)
-        
-        Args:
-            reply_text: Reply text content
-            
-        Returns:
-            Sentiment as string ('bullish', 'bearish', or 'neutral')
-        """
-        # Bullish words
-        bullish_words = [
-            'bullish', 'bull', 'buy', 'long', 'moon', 'rally', 'pump', 'uptrend',
-            'breakout', 'strong', 'growth', 'profit', 'gain', 'higher', 'up',
-            'optimistic', 'momentum', 'support', 'bounce', 'surge', 'uptick'
-        ]
-        
-        # Bearish words
-        bearish_words = [
-            'bearish', 'bear', 'sell', 'short', 'dump', 'crash', 'correction',
-            'downtrend', 'weak', 'decline', 'loss', 'lower', 'down', 'pessimistic',
-            'resistance', 'fall', 'drop', 'slump', 'collapse', 'cautious'
-        ]
-        
-        # Count sentiment words
-        reply_lower = reply_text.lower()
-        
-        bullish_count = sum(1 for word in bullish_words if re.search(r'\b' + word + r'\b', reply_lower))
-        bearish_count = sum(1 for word in bearish_words if re.search(r'\b' + word + r'\b', reply_lower))
-        
-        # Check for negation that might flip sentiment
-        negation_words = ['not', 'no', 'never', 'doubt', 'unlikely', 'against']
-        for neg in negation_words:
-            for bull in bullish_words:
-                if f"{neg} {bull}" in reply_lower or f"{neg} really {bull}" in reply_lower:
-                    bullish_count -= 1
-                    bearish_count += 1
-            
-            for bear in bearish_words:
-                if f"{neg} {bear}" in reply_lower or f"{neg} really {bear}" in reply_lower:
-                    bearish_count -= 1
-                    bullish_count += 1
-        
-        # Determine overall sentiment
-        if bullish_count > bearish_count:
-            return 'bullish'
-        elif bearish_count > bullish_count:
-            return 'bearish'
-        else:
-            return 'neutral'
-    
-    def _capture_reply_metadata(self, post: Dict[str, Any], reply_text: str) -> Dict[str, Any]:
-        """
-        Capture metadata about a reply for analysis and tracking
-        
-        Args:
-            post: Original post data
-            reply_text: Generated reply text
-            
-        Returns:
-            Dictionary with metadata about the reply
-        """
-        # Extract mentioned tokens
-        tokens = self._extract_mentioned_tokens(reply_text)
-        
-        # Determine reply sentiment
-        sentiment = self._get_reply_sentiment(reply_text)
-        
-        # Count relevant metrics
-        char_count = len(reply_text)
-        word_count = len(reply_text.split())
-        
-        # Track replied topics
-        topics = []
-        if 'analysis' in post and 'topics' in post['analysis']:
-            topics = list(post['analysis']['topics'].keys())
-        
-        return {
-            'tokens': tokens,
-            'sentiment': sentiment,
-            'char_count': char_count,
-            'word_count': word_count,
-            'topics': topics,
-            'timestamp': datetime.now()
-        }    
+            'timestamp': self._strip_timezone(datetime.now())  
+        }        
