@@ -7,6 +7,7 @@ import re
 import random
 import math
 from datetime import datetime, timedelta
+from datetime_utils import ensure_naive_datetimes, strip_timezone, safe_datetime_diff
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -101,6 +102,37 @@ class TimelineScraper:
         self.take_debug_screenshots = True  # Enable screenshots for debugging
         
         logger.logger.info("Timeline scraper initialized with enhanced resilience and multiple detection strategies")
+
+    def _strip_timezone(self, dt):
+        return strip_timezone(dt)
+        
+    def _safe_datetime_diff(self, dt1, dt2):
+        return safe_datetime_diff(dt1, dt2)
+    
+    @ensure_naive_datetimes
+    def ensure_naive_datetimes(func):
+        """
+        Decorator to ensure all datetime objects passed to a function are timezone-naive.
+        Place this decorator on methods that compare or operate on datetime objects.
+        """
+        def wrapper(self, *args, **kwargs):
+            # Process args
+            new_args = []
+            for arg in args:
+                if isinstance(arg, datetime):
+                    arg = self._strip_timezone(arg)
+                new_args.append(arg)
+        
+            # Process kwargs
+            new_kwargs = {}
+            for key, value in kwargs.items():
+                if isinstance(value, datetime):
+                    value = self._strip_timezone(value)
+                new_kwargs[key] = value
+        
+            # Call the original function with sanitized datetimes
+            return func(self, *new_args, **new_kwargs)
+        return wrapper
 
     def navigate_to_home_timeline(self) -> bool:
         """
@@ -1880,6 +1912,7 @@ class TimelineScraper:
         logger.logger.info(f"Filtered out {len(posts) - len(filtered_posts)} already replied posts")
         return filtered_posts
     
+    @ensure_naive_datetimes
     def prioritize_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Sort posts by engagement level, relevance, recency with improved ranking
@@ -1910,7 +1943,7 @@ class TimelineScraper:
             timestamp = post.get('timestamp')
             if timestamp:
                 # Calculate hours since posted
-                hours_ago = (datetime.now() - timestamp).total_seconds() / 3600
+                hours_ago = safe_datetime_diff(datetime.now(), timestamp) / 3600
                 
                 # More recent posts get higher scores (inverse relationship)
                 recency_score = max(0, 30 - (hours_ago * 2.5))  # Lose 2.5 points per hour, max 30
@@ -1954,5 +1987,4 @@ class TimelineScraper:
                     preview += "..."
                 logger.logger.info(f"  {i+1}. Score: {post.get('priority_score', 0):.1f} - {preview}")
         
-        return sorted_posts                                   
-                   
+        return sorted_posts                    
