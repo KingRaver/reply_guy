@@ -9,6 +9,7 @@ import requests
 import re
 import numpy as np
 from datetime import datetime, timedelta
+from datetime_utils import strip_timezone, ensure_naive_datetimes, safe_datetime_diff
 import anthropic
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -20,6 +21,7 @@ import statistics
 import threading
 import queue
 import json
+from llm_provider import LLMProvider
 
 from utils.logger import logger
 from utils.browser import browser
@@ -38,11 +40,12 @@ class CryptoAnalysisBot:
     def __init__(self) -> None:
        self.browser = browser
        self.config = config
-       self.claude_client = anthropic.Client(api_key=self.config.CLAUDE_API_KEY)
+       self.llm_provider = LLMProvider(self.config)  
        self.past_predictions = []
        self.meme_phrases = MEME_PHRASES
        self.last_check_time = datetime.now()
        self.last_market_data = {}
+       self.last_reply_time = strip_timezone(datetime.now())
        
        # Multi-timeframe prediction tracking
        self.timeframes = ["1h", "24h", "7d"]
@@ -59,10 +62,10 @@ class CryptoAnalysisBot:
        # Prediction accuracy tracking by timeframe
        self.prediction_accuracy = {tf: {'correct': 0, 'total': 0} for tf in self.timeframes}
        
-       # Initialize prediction engine with database and Claude API key
+       # Initialize prediction engine with database and LLM Provider
        self.prediction_engine = PredictionEngine(
            database=self.config.db,
-           claude_api_key=self.config.CLAUDE_API_KEY
+           llm_provider=self.llm_provider  # Pass provider instead of API key
        )
        
        # Create a queue for predictions to process
@@ -140,7 +143,7 @@ class CryptoAnalysisBot:
        
        # Initialize reply functionality components
        self.timeline_scraper = TimelineScraper(self.browser, self.config, self.config.db)
-       self.reply_handler = ReplyHandler(self.browser, self.config, self.claude_client, self.coingecko, self.config.db)
+       self.reply_handler = ReplyHandler(self.browser, self.config, self.llm_provider, self.coingecko, self.config.db)
        self.content_analyzer = ContentAnalyzer(self.config, self.config.db)
        
        # Reply tracking and control
@@ -151,6 +154,79 @@ class CryptoAnalysisBot:
        self.last_reply_time = datetime.now() - timedelta(minutes=self.reply_cooldown)  # Allow immediate first run
        
        logger.log_startup()
+
+    @ensure_naive_datetimes
+    def _check_for_reply_opportunities(self, market_data: Dict[str, Any]) -> bool:
+        """
+        Check for posts to reply to and generate replies
+        Returns True if any replies were posted
+        """
+        now = datetime.now()
+
+        # Check if it's time to look for posts to reply to
+        time_since_last_check = (now - self.last_reply_check).total_seconds() / 60
+        if time_since_last_check < self.reply_check_interval:
+            logger.logger.debug(f"Skipping reply check, {time_since_last_check:.1f} minutes since last check (interval: {self.reply_check_interval})")
+            return False
+    
+        # Also check cooldown period
+        time_since_last_reply = (now - self.last_reply_time).total_seconds() / 60
+        if time_since_last_reply < self.reply_cooldown:
+            logger.logger.debug(f"In reply cooldown period, {time_since_last_reply:.1f} minutes since last reply (cooldown: {self.reply_cooldown})")
+            return False
+    
+        logger.logger.info("Starting check for posts to reply to")
+        self.last_reply_check = now
+    
+        try:
+            # Scrape timeline for posts
+            posts = self.timeline_scraper.scrape_timeline(count=self.max_replies_per_cycle * 2)  # Get more to filter
+            logger.logger.info(f"Timeline scraping completed - found {len(posts) if posts else 0} posts")
+    
+            if not posts:
+                logger.logger.warning("No posts found during timeline scraping")
+                return False
+
+            # Log sample posts for debugging
+            for i, post in enumerate(posts[:3]):  # Log first 3 posts
+                logger.logger.info(f"Sample post {i}: {post.get('content', '')[:100]}...")
+
+            # Find market-related posts
+            logger.logger.info(f"Finding market-related posts among {len(posts)} scraped posts")
+            market_posts = self.content_analyzer.find_market_related_posts(posts)
+            logger.logger.info(f"Found {len(market_posts)} market-related posts, checking which ones need replies")
+        
+            # Filter out posts we've already replied to
+            unreplied_posts = self.timeline_scraper.filter_already_replied_posts(market_posts)
+            logger.logger.info(f"Found {len(unreplied_posts)} unreplied market-related posts")
+            if unreplied_posts:
+                for i, post in enumerate(unreplied_posts[:3]):
+                    logger.logger.info(f"Sample unreplied post {i}: {post.get('content', '')[:100]}...")
+        
+            if not unreplied_posts:
+                return False
+            
+            # Prioritize posts (engagement, relevance, etc.)
+            prioritized_posts = self.timeline_scraper.prioritize_posts(unreplied_posts)
+        
+            # Limit to max replies per cycle
+            posts_to_reply = prioritized_posts[:self.max_replies_per_cycle]
+        
+            # Generate and post replies
+            logger.logger.info(f"Starting to reply to {len(posts_to_reply)} prioritized posts")
+            successful_replies = self.reply_handler.reply_to_posts(posts_to_reply, market_data, max_replies=self.max_replies_per_cycle)
+        
+            if successful_replies > 0:
+                logger.logger.info(f"Successfully posted {successful_replies} replies")
+                self.last_reply_time = now                    
+                return True
+            else:
+                logger.logger.info("No replies were successfully posted")
+                return False
+            
+        except Exception as e:
+            logger.log_error("Check For Reply Opportunities", str(e))
+            return False
 
     def _get_historical_volume_data(self, chain: str, minutes: int = None, timeframe: str = "1h") -> List[Dict[str, Any]]:
        """
@@ -561,7 +637,7 @@ class CryptoAnalysisBot:
        
        # Return the requested number of posts
        return filtered_posts[:count]
-   
+
     def _schedule_timeframe_post(self, timeframe: str, delay_hours: float = None) -> None:
        """
        Schedule the next post for a specific timeframe
@@ -662,7 +738,8 @@ class CryptoAnalysisBot:
            
        # Pick the most overdue timeframe
        chosen_timeframe = max(due_timeframes, 
-                             key=lambda tf: (datetime.now() - self._ensure_datetime(self.next_scheduled_posts.get(tf, datetime.min))).total_seconds())
+                             key=lambda tf: safe_datetime_diff(datetime.now(), self._ensure_datetime(self.next_scheduled_posts.get(tf, datetime.min)))
+       )
        
        logger.logger.info(f"Selected {chosen_timeframe} for timeframe rotation posting")
 
@@ -736,7 +813,7 @@ class CryptoAnalysisBot:
             else:
                 # Calculate hours since last post
                 last_post_time = max(p.get('timestamp', datetime.min) for p in token_posts)
-                hours_since = (datetime.now() - last_post_time).total_seconds() / 3600
+                hours_since = safe_datetime_diff(datetime.now(), last_post_time) / 3600
                 
                 # Scale recency score based on timeframe
                 if timeframe == "1h":
@@ -784,7 +861,7 @@ class CryptoAnalysisBot:
         
         return candidates[0][0] if candidates else None
 
-    # New method for handling replies
+    # Method for handling replies
     def _check_for_posts_to_reply(self, market_data: Dict[str, Any]) -> bool:
         """
         Check for posts to reply to and generate replies
@@ -1126,7 +1203,7 @@ class CryptoAnalysisBot:
        except Exception as e:
            logger.log_error("Get All Active Predictions", str(e))
            return {tf: {} for tf in self.timeframes}
-   
+
     def _evaluate_expired_timeframe_predictions(self) -> Dict[str, int]:
        """
        Find and evaluate expired predictions across all timeframes
@@ -1555,7 +1632,7 @@ class CryptoAnalysisBot:
         except Exception as e:
             logger.log_error(f"Volume Profile Analysis - {token} ({timeframe})", str(e))
             return {'timeframe': timeframe}
-    
+
     def _detect_volume_anomalies(self, token: str, market_data: Dict[str, Any], 
                                timeframe: str = "1h") -> Dict[str, Any]:
         """
@@ -2435,14 +2512,14 @@ class CryptoAnalysisBot:
     
         # Keep only predictions from the last 24 hours, up to MAX_PREDICTIONS
         self.past_predictions = [p for p in self.past_predictions 
-                              if (datetime.now() - p['timestamp']).total_seconds() < 86400]
+                                  if safe_datetime_diff(datetime.now(), p['timestamp']) < 86400]
     
         # Trim to max predictions if needed
         if len(self.past_predictions) > MAX_PREDICTIONS:
             self.past_predictions = self.past_predictions[-MAX_PREDICTIONS:]
         
         logger.logger.debug(f"Tracked {timeframe} prediction for {token}")
-        
+
     def _validate_past_prediction(self, prediction: Dict[str, Any], current_prices: Dict[str, float]) -> str:
         """
         Check if a past prediction was accurate
@@ -2495,9 +2572,9 @@ class CryptoAnalysisBot:
         """
         # Look for the most recent prediction for this token and timeframe
         recent_predictions = [p for p in self.past_predictions 
-                           if p['timestamp'] > (datetime.now() - timedelta(hours=24))
-                           and p['token'] == token
-                           and p.get('timeframe', '1h') == timeframe]
+                            if safe_datetime_diff(datetime.now(), p['timestamp']) < 24*3600
+                            and p['token'] == token
+                            and p.get('timeframe', '1h') == timeframe]
     
         if not recent_predictions:
             return None
@@ -2511,7 +2588,7 @@ class CryptoAnalysisBot:
         wrong_predictions = [p for p in recent_predictions if p['outcome'] == 'wrong']
         if wrong_predictions:
             worst_pred = wrong_predictions[-1]
-            time_ago = int((datetime.now() - worst_pred['timestamp']).total_seconds() / 3600)
+            time_ago = int(safe_datetime_diff(datetime.now(), worst_pred['timestamp']) / 3600)
         
             # If time_ago is 0, set it to 1 to avoid awkward phrasing
             if time_ago == 0:
@@ -2880,14 +2957,17 @@ Past Context: {callback if callback else 'None'}
 Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phrases."""
             
                 logger.logger.debug(f"Sending {timeframe} analysis request to Claude")
-                response = self.claude_client.messages.create(
-                    model="claude-3-7-sonnet-20250219",
-                    max_tokens=1000,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-            
-                analysis = response.content[0].text
-                logger.logger.debug(f"Received {timeframe} analysis from Claude")
+                
+                # Use the LLMProvider instead of direct Claude client
+                analysis = self.llm_provider.generate_text(prompt, max_tokens=1000)
+                
+                if not analysis:
+                    logger.logger.error(f"Failed to get analysis from LLM provider")
+                    retry_count += 1
+                    time.sleep(5 * retry_count)
+                    continue
+                
+                logger.logger.debug(f"Received {timeframe} analysis from LLMProvider")
             
                 # Store prediction data
                 prediction_data = {
@@ -3031,7 +3111,7 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
 
         # Check if regular interval has passed (only for 1h timeframe)
         if not trigger_reason and timeframe == "1h":
-            time_since_last = (datetime.now() - self.last_check_time).total_seconds()
+            time_since_last = safe_datetime_diff(datetime.now(), self.last_check_time)
             if time_since_last >= self.config.BASE_INTERVAL:
                 trigger_reason = f"regular_interval_{timeframe}"
                 logger.logger.debug(f"Regular interval check triggered for {timeframe}")
@@ -3230,7 +3310,7 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
                 
                     if last_prediction:
                         last_time = datetime.fromisoformat(last_prediction[0]["timestamp"])
-                        hours_since_prediction = (datetime.now() - last_time).total_seconds() / 3600
+                        hours_since_prediction = safe_datetime_diff(datetime.now(), last_time) / 3600
                 
                     # Scale time factor based on timeframe
                     if timeframe == "1h":
@@ -3324,38 +3404,6 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
         except Exception as e:
             logger.log_error(f"Generate Predictions - {token} ({timeframe})", str(e))
             return {}
-
-    # NEW METHODS FOR REPLY FUNCTIONALITY
-
-    def _check_for_reply_opportunities(self, market_data: Dict[str, Any]) -> bool:
-        """
-        Check for opportunities to reply to other users' posts
-        Returns True if any replies were made
-        """
-        now = datetime.now()
-        
-        # Check if it's time to look for posts to reply to
-        time_since_last_check = (now - self.last_reply_check).total_seconds() / 60
-        if time_since_last_check < self.reply_check_interval:
-            logger.logger.debug(f"Skipping reply check, {time_since_last_check:.1f} minutes since last check (interval: {self.reply_check_interval})")
-            return False
-            
-        # Also check cooldown period
-        time_since_last_reply = (now - self.last_reply_time).total_seconds() / 60
-        if time_since_last_reply < self.reply_cooldown:
-            logger.logger.debug(f"In reply cooldown period, {time_since_last_reply:.1f} minutes since last reply (cooldown: {self.reply_cooldown})")
-            return False
-            
-        logger.logger.info("Starting check for posts to reply to")
-        self.last_reply_check = now
-        
-        try:
-            # Call the reply handler to handle the process
-            return self._check_for_posts_to_reply(market_data)
-            
-        except Exception as e:
-            logger.log_error("Reply Opportunity Check", str(e))
-            return False
 
     def _run_analysis_cycle(self) -> None:
         """Run analysis and posting cycle for all tokens with multi-timeframe prediction integration"""
@@ -3562,7 +3610,7 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
                     self._run_analysis_cycle()
                     
                     # Calculate sleep time until next regular check
-                    time_since_last = (datetime.now() - self.last_check_time).total_seconds()
+                    time_since_last = safe_datetime_diff(datetime.now(), self.last_check_time)
                     sleep_time = max(0, self.config.BASE_INTERVAL - time_since_last)
                     
                     # Check if we should post a weekly summary
@@ -3591,4 +3639,5 @@ if __name__ == "__main__":
         bot = CryptoAnalysisBot()
         bot.start()
     except Exception as e:
-        logger.log_error("Bot Startup", str(e))                                        
+        logger.log_error("Bot Startup", str(e))
+
