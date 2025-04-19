@@ -52,7 +52,7 @@ xtc/
 │   ├── architecture.md           # Architecture documentation
 │   └── setup_guide.md            # Setup instructions
 │
-├── thc_venv/                     # Python virtual environment
+├── xtc_venv/                     # Python virtual environment
 │
 ├── .env                          # Environment variables
 ├── .gitignore                    # Git ignore patterns
