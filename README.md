@@ -1,10 +1,10 @@
-# 🚀 Crypto Analysis Agent
+# 🚀 Tokenetics Market Oracle
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Anthropic Claude](https://img.shields.io/badge/AI-Anthropic%20Claude-9cf)](https://www.anthropic.com/)
+[![Modular LLM](https://img.shields.io/badge/LLM-Modular%20Architecture-9cf)](https://www.anthropic.com/)
 [![CoinGecko API](https://img.shields.io/badge/API-CoinGecko-brightgreen)](https://www.coingecko.com/en/api)
 
-An advanced cryptocurrency analysis agent that leverages AI and market data to provide intelligent market insights, predictions, and social media engagement. The agent combines real-time market data with Anthropic's Claude AI to generate high-quality analysis across multiple timeframes.
+An advanced cryptocurrency analysis system that leverages AI and market data to provide intelligent market insights, predictions, and social media engagement. Tokenetics Market Oracle combines real-time market data with a modular LLM architecture to generate high-quality analysis across multiple timeframes.
 
 ## ✨ Features
 
@@ -15,24 +15,34 @@ An advanced cryptocurrency analysis agent that leverages AI and market data to p
 - Automatic rotation between timeframes based on market activity
 
 ### 📊 Advanced Market Analytics
-- Smart money movement detection
-- Volume pattern analysis
-- Market correlation mapping
-- Price-volume divergence detection
-- Capital rotation identification
-- Comparative market performance
+- Comprehensive technical indicators suite (RSI, MACD, Bollinger Bands, Stochastic Oscillator)
+- Smart money movement detection with Z-score thresholds and volume cluster identification
+- Multi-dimensional volume analysis with hourly and daily profiling
+- Market correlation mapping with sector rotation detection
+- Price-volume divergence detection with quantitative scoring
+- Adaptive trend detection across different timeframes
+- Ichimoku Cloud analysis for longer timeframes
+- Advanced Directional Index (ADX) for trend strength evaluation 
+- Pivot point calculations with multiple methodologies (Standard, Fibonacci, Woodie)
+- Dynamic volatility assessment and market comparison metrics
 
 ### 🤖 AI-Powered Insights
-- Natural language market analysis via Claude API
-- Smart prediction engine with confidence intervals
+- Natural language market analysis via modular LLM architecture
+- Advanced prediction engine with sophisticated confidence intervals
 - Sentiment detection and classification
 - Momentum scoring system
+- Multi-model prediction with resilient fallback systems
+- Technical indicator fusion for comprehensive market analysis
 
 ### 💬 Social Media Integration
-- Automated posting of market insights
-- Intelligent reply system to engage with other users
-- Duplicate content prevention
-- Performance tracking and weekly summaries
+- Sophisticated X/Twitter engagement system with natural language conversation capabilities
+- Advanced content analyzer for identifying high-engagement crypto discussions
+- Smart reply prioritization based on relevance, engagement metrics, and conversation state
+- Context-aware response generation with sentiment and tone matching
+- Trending topic detection and dynamic adaptation
+- Cross-timeframe engagement strategy with memory and streak tracking
+- Duplicate content prevention with enhanced time-based detection
+- Performance tracking and weekly automated summaries
 
 ### 📈 Prediction Tracking & Accountability
 - Historical performance tracking
@@ -40,40 +50,117 @@ An advanced cryptocurrency analysis agent that leverages AI and market data to p
 - Smart evaluation of expired predictions
 - Weekly performance summaries
 
-## 🛠️ Technical Architecture
+## 🧩 Natural Language Processing Capabilities
 
-![Architecture Overview]([(https://github.com/KingRaver/reply_guy/architecture.txt)](https://github.com/KingRaver/reply_guy/blob/main/architecture.txt)])
+The Tokenetics Market Oracle includes advanced NLP for engagement and sentiment analysis:
+
+- **Sentiment Detection**: Multi-dimensional sentiment analysis with confidence scoring
+- **Tone Analysis**: Identification of conversational tone for better engagement
+- **Opinion Detection**: Classification of opinion types, strength, and directionality
+- **Meme & Cultural Reference Detection**: Recognition of crypto community slang and memes
+- **Question Classification**: Differentiation between rhetorical, technical, and opinion-seeking questions
+- **Conversation Hook Identification**: Detection of engagement opportunities
+- **Contextual Relevance Scoring**: Evaluation of content against current market conditions
+- **Memetic Response Generation**: Dynamic creation of engaging, culturally relevant responses
+- **Trending Topic Detection**: Identification of popular discussion topics in the crypto space
+
+## 🛠️ Technical Architecture
 
 ### Core Components
 
 - **Market Data Handler**: Fetches and processes cryptocurrency market data
-- **Analysis Engine**: Performs technical analysis on multiple timeframes
-- **Prediction Engine**: Generates price predictions with confidence intervals
-- **Social Media Manager**: Handles posting and interaction logic
-- **Database Manager**: Stores historical data and prediction performance
+- **Technical Indicators Engine**: Calculates 15+ technical indicators across timeframes
+- **Smart Money Detector**: Identifies institutional activity patterns
+- **Natural Language Processor**: Analyzes social content for engagement opportunities
+- **Content Analyzer**: Advanced crypto discussion relevance and sentiment detection
+- **Analysis Engine**: Performs multi-dimensional market analysis
+- **Prediction Engine**: Generates price predictions with confidence intervals and fallback models
+- **Social Media Manager**: Handles posting and interaction logic for Twitter/X
+- **Timeline Scraper**: Intelligent content discovery and prioritization
+- **Reply Handler**: Advanced engagement optimization
+- **Memory System**: Tracks conversation state and prediction performance
+- **Database Manager**: Stores historical data and prediction performance for tracking
 
 ### Key Technologies
 
 - **Python 3.8+**: Core programming language
-- **Anthropic Claude API**: AI-powered analysis generation
+- **Modular LLM Architecture**: Supporting multiple language models (currently using Anthropic Claude)
 - **Selenium**: Web automation for social media interaction
 - **CoinGecko API**: Real-time crypto market data
+- **SQLAlchemy**: ORM for database operations
 - **SQLite**: Local database for tracking and analytics
+- **TensorFlow**: Deep learning neural networks for forecasting
+- **Scikit-learn**: Machine learning for prediction models
+- **Statsmodels**: Statistical time series analysis
+- **Pandas/NumPy**: Data manipulation and numerical computing
+
+## 🧠 AI and Machine Learning Models
+
+The Tokenetics Market Oracle leverages multiple forecasting methodologies to ensure robust predictions:
+
+### Statistical Models
+- **ARIMA**: Time series forecasting with automatic parameter optimization
+- **Holt-Winters**: Exponential smoothing for data with trend and seasonality
+- **Weighted Average Forecasts**: Volume-weighted and linearly weighted predictions
+- **Moving Average**: Adaptive window sizes based on timeframe
+
+### Machine Learning Models
+- **LSTM Neural Networks**: Deep learning for complex pattern recognition
+- **Random Forest Regression**: Ensemble learning with feature importance analysis
+- **Linear Regression**: Baseline model with coefficient analysis
+- **Feature Engineering**: Automated creation of technical indicators as model features
+
+### Ensemble Approach
+- **Model Weighting**: Dynamic weighting based on historical performance
+- **Confidence Intervals**: Statistical and ML-based confidence calculations
+- **Fallback Chain**: Multi-stage fallback system for resilient predictions
+- **Prediction Validation**: Comprehensive validation against historical patterns
+
+## 🧠 Resilient Architecture
+
+The Market Oracle is designed with multi-stage fallbacks and resilience features:
+
+- **Enhanced Timeline Scraping**: Multiple detection strategies to ensure reliable data collection
+- **Multi-Model Prediction**: Fallback prediction models when primary models have insufficient data
+- **Robust Error Handling**: Comprehensive logging and exception management
+- **Session Persistence**: Automatic recovery from temporary disconnections
+- **Time-Based Duplicate Prevention**: Advanced algorithms to avoid repetitive content
+- **Adaptive Error Recovery**: Cooldown mechanisms to prevent repeated failures
+- **Graceful Degradation**: Maintains functionality even when components fail
+- **Conversation State Tracking**: Memory of user interactions and engagement history
+- **Engagement Pattern Recognition**: Identifies optimal conversation opportunities
+
+## 📊 Modular LLM Architecture
+
+The system features a flexible, provider-agnostic language model integration:
+
+- **Provider Abstraction**: Easy switching between different LLM providers
+- **Model Configuration**: Customizable model selection (currently using Claude)
+- **Context Optimization**: Tailored prompts for prediction and engagement scenarios
+- **Performance Tracking**: Monitoring of LLM response quality and generation time
+- **FOMO Enhancement**: Smart psychological targeting for engagement optimization
+- **Prompt Engineering**: Carefully crafted prompts with technical analysis context
+- **Response Parsing**: Robust JSON parsing with fallback mechanisms
+- **Streak Tracking**: Performance tracking for credibility enhancement
+- **Conversation Focus Detection**: Identifies key topics and conversation hooks
+- **Engagement Optimization**: Automatic tone and sentiment matching
+- **Memetic Response Generation**: Dynamic meme phrase selection based on market conditions
+- **Multi-Timeframe Awareness**: Content adaptation based on prediction timeframe
 
 ## 📋 Requirements
 
 - Python 3.8+
-- Anthropic API key
+- LLM API access (currently configured for Anthropic)
 - CoinGecko API access
-- Twitter account credentials
+- Twitter/X account credentials
 - ChromeDriver for Selenium
 
 ## 🚀 Getting Started
 
 1. Clone the repository
    ```bash
-   git clone https://github.com/kingraver/reply_guy.git
-   cd reply_guy
+   git clone https://github.com/yourusername/tokenetics-market-oracle.git
+   cd tokenetics-market-oracle
    ```
 
 2. Install dependencies
@@ -81,55 +168,37 @@ An advanced cryptocurrency analysis agent that leverages AI and market data to p
    pip install -r requirements.txt
    ```
 
-3. Configure your credentials in `config.py`
-   ```python
-   # Example configuration
-   CLAUDE_API_KEY = "your_anthropic_api_key"
-   TWITTER_USERNAME = "your_twitter_username"
-   TWITTER_PASSWORD = "your_twitter_password"
+3. Configure your credentials in `.env`
+   ```
+   LLM_API_KEY=your_llm_api_key
+   TWITTER_USERNAME=your_twitter_username
+   TWITTER_PASSWORD=your_twitter_password
+   CHROME_DRIVER_PATH=/path/to/chromedriver
    ```
 
 4. Run the bot
    ```bash
-   python reply_guy.py
+   python src/bot.py
    ```
 
 ## 🔧 Configuration Options
 
-The agent is highly configurable to suit different analysis needs:
+The system is highly configurable to suit different analysis needs:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `BASE_INTERVAL` | Time between regular checks (seconds) | 3600 |
-| `VOLUME_WINDOW_MINUTES` | Window for volume analysis | 60 |
+| `REPLY_CHECK_INTERVAL` | Time between social media reply checks (minutes) | 5 |
 | `VOLUME_TREND_THRESHOLD` | Threshold for volume trend detection | 15.0 |
 | `SMART_MONEY_ZSCORE_THRESHOLD` | Z-score threshold for smart money detection | 2.0 |
 | `CORRELATION_THRESHOLD` | Threshold for correlation significance | 0.75 |
-| `TWEET_CONSTRAINTS` | Character limits for Twitter posts | Varies |
-
-## 📊 Performance Metrics
-
-The agent tracks its prediction performance across timeframes and tokens:
-
-```
-== 1 HOUR PREDICTIONS ==
-Overall Accuracy: 68.7% (123/179)
-
-Top Performers:
-#SOL: 73.4% (32 predictions)
-#ETH: 70.2% (41 predictions)
-#BTC: 69.5% (52 predictions)
-
-== 24 HOUR PREDICTIONS ==
-Overall Accuracy: 65.3% (81/124)
-...
-```
+| `TIMEFRAME_FREQUENCIES` | Posting frequency for different timeframes | Varies |
 
 ## 📚 Advanced Usage
 
 ### Custom Token Tracking
 
-Add or modify tracked tokens in the initialization:
+Add or modify tracked tokens in the configuration:
 
 ```python
 self.target_chains = {
@@ -157,11 +226,16 @@ self.timeframe_thresholds = {
 
 ## 🔮 Future Roadmap
 
-- **On-chain data integration**: Incorporate wallet movements and smart contract activity
-- **Sentiment analysis**: Monitor social media sentiment across platforms
-- **NFT market integration**: Track NFT market data alongside cryptocurrencies
-- **DeFi protocol analytics**: Monitor DeFi protocols for yield opportunities
-- **Multi-platform support**: Expand to additional social media platforms
+- **Real-time Analytical Charts**: Enhanced visualization of prediction performance and market trends
+- **Smart Trading Automation**: Integration with Coinbase/Base trading tools for automated trading strategies
+- **Community Management**: Advanced engagement features for building crypto communities
+- **On-chain Data Integration**: Incorporate wallet movements and smart contract activity
+- **Extended Token Coverage**: Support for additional cryptocurrencies beyond current selection
+- **Multi-platform Support**: Expand social media engagement beyond Twitter/X
+- **Advanced Prompt Engineering**: Further optimization of LLM interactions for specific market scenarios
+- **Adaptive Learning System**: Improvement of prediction accuracy based on historical outcomes
+- **Cross-Platform Analytics**: Integration of sentiment data from multiple social platforms
+- **Institutional Signal Detection**: Enhanced algorithms for detecting large player movements
 
 ## 📄 License
 
@@ -169,7 +243,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🤝 Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/yourusername/crypto-analysis-bot/issues).
+Contributions, issues, and feature requests are welcome! Feel free to check the issues page.
 
 ## 📧 Contact
 
