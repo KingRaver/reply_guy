@@ -20,7 +20,136 @@ class CryptoDatabase:
         self._initialize_database()
         self.add_ichimoku_column()
         self.add_missing_columns()
+        self.add_replied_posts_table()
+
+    def add_replied_posts_table(self):
+        """Add the replied_posts table if it doesn't exist"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS replied_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id TEXT NOT NULL,
+                    post_url TEXT,
+                    reply_content TEXT,
+                    replied_at DATETIME NOT NULL,
+                    UNIQUE(post_id)
+                )
+            """)
+        
+            # Create index for faster lookups
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_replied_posts_post_id ON replied_posts(post_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_replied_posts_post_url ON replied_posts(post_url)")
+        
+            conn.commit()
+            logger.logger.info("Added replied_posts table to database")
+            return True
+        except Exception as e:
+            logger.log_error("Add Replied Posts Table", str(e))
+            conn.rollback()
+            return False 
+
+    def store_reply(self, post_id: str, post_url: str = None, post_author: str = None,
+                   post_text: str = None, reply_text: str = None, reply_time = None):
+        """
+        Store a reply to a post in the database
     
+        Args:
+            post_id: The ID of the post being replied to
+            post_url: URL of the post (optional)
+            post_author: Author of the original post (optional)
+            post_text: The content of the original post (optional)
+            reply_text: The content of your reply (optional)
+            reply_time: Optional timestamp (defaults to current time)
+
+        Returns:
+            bool: True if stored successfully, False otherwise
+        """
+        try:
+            if reply_time is None:
+                reply_time = datetime.now()
+        
+            conn, cursor = self._get_connection()
+    
+            # First check if we need to create the table
+            self._ensure_replied_posts_table_exists()
+    
+            # Store the reply
+            cursor.execute("""
+                INSERT INTO replied_posts (
+                    post_id, post_url, reply_content, replied_at
+                ) VALUES (?, ?, ?, ?)
+            """, (
+                post_id,
+                post_url,
+                reply_text,
+                reply_time
+            ))
+    
+            conn.commit()
+            return True
+    
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.log_error("Store Reply", str(e))
+            return False
+
+    def _ensure_replied_posts_table_exists(self):
+        """Ensure the replied_posts table exists in the database"""
+        try:
+            conn, cursor = self._get_connection()
+        
+            # Check if table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='replied_posts'")
+            if cursor.fetchone() is None:
+                # Create table if it doesn't exist
+                cursor.execute("""
+                    CREATE TABLE replied_posts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp DATETIME NOT NULL,
+                        post_id TEXT NOT NULL,
+                        original_content TEXT,
+                        reply_content TEXT,
+                        UNIQUE(post_id)
+                    )
+                """)
+            
+                conn.commit()
+                logger.logger.info("Added replied_posts table to database")
+            
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.log_error("Ensure Replied Posts Table", str(e))
+
+    def mark_post_as_replied(self, post_id: str, post_url: str = None, reply_content: str = None) -> bool:
+        """
+        Mark a post as replied to
+    
+        Args:
+            post_id: The ID of the post
+            post_url: The URL of the post (optional)
+            reply_content: The content of the reply (optional)
+    
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            conn, cursor = self._get_connection()
+        
+            cursor.execute("""
+                INSERT INTO replied_posts (post_id, post_url, reply_content, replied_at)
+                VALUES (?, ?, ?, ?)
+            """, (post_id, post_url, reply_content, datetime.now()))
+        
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.log_error("Mark Post As Replied", str(e))
+            conn.rollback()
+            return False
+
     def add_missing_columns(self):
         """Add missing columns to technical_indicators table if they don't exist"""
         conn, cursor = self._get_connection()
@@ -527,6 +656,47 @@ class CryptoDatabase:
         except Exception as e:
             logger.log_error("Store Posted Content", str(e))
             conn.rollback()
+    
+    def check_if_post_replied(self, post_id: str, post_url: str = None) -> bool:
+        """
+        Check if we've already replied to a post
+    
+        Args:
+            post_id: The ID of the post
+            post_url: The URL of the post (optional)
+        
+        Returns:
+            True if we've already replied to this post, False otherwise
+        """
+        try:
+            conn, cursor = self._get_connection()
+        
+            # Check for post_id first
+            if post_id:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM replied_posts
+                    WHERE post_id = ?
+                """, (post_id,))
+                count = cursor.fetchone()[0]
+                if count > 0:
+                    return True
+                
+            # If post_url is provided and post_id check failed, try with URL
+            if post_url:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM replied_posts
+                    WHERE post_url = ?
+                """, (post_url,))
+                count = cursor.fetchone()[0]
+                if count > 0:
+                    return True
+                
+            # No record found
+            return False
+        
+        except Exception as e:
+            logger.log_error("Check If Post Replied", str(e))
+            return False
 
     def store_mood(self, chain: str, mood: str, indicators: Dict) -> None:
         """Store mood data for a specific chain"""
@@ -1290,7 +1460,7 @@ class CryptoDatabase:
             key_factors = json.dumps(prediction_data.get("key_factors", []))
             
             # Default Claude model
-            claude_model = "claude-3-7-sonnet-20250219"
+            claude_model = "claude-3-5-sonnet-20240620"
             
             # Store inputs if available
             input_data = json.dumps(prediction_data.get("inputs", {}))
