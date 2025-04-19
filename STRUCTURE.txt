@@ -1,4 +1,4 @@
-ussr
+xtc
 ├── README.md
 ├── STRUCTURE.md
 ├── __init__.py
@@ -15,7 +15,7 @@ ussr
 │   ├── ETHBTCCorrelation.log
 │   ├── analysis
 │   │   └── market_analysis.log
-│   ├── bosnia.log
+│   ├── xtc.log
 │   ├── claude.log
 │   ├── claude_api.log
 │   ├── coingecko.log
