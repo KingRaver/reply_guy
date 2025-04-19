@@ -4,6 +4,7 @@
 from typing import Dict, List, Optional, Union, Any, Tuple
 import numpy as np
 import pandas as pd
+import re
 from datetime import datetime, timedelta
 import json
 import random
@@ -29,8 +30,8 @@ from utils.logger import logger
 from config import config
 
 class TechnicalIndicators:
-    """Class for calculating technical indicators"""
-    
+    """Class for calculating technical indicators"""     
+
     @staticmethod
     def safe_max(sequence, default=None):
         """Safely get maximum value from a sequence, returning default if empty"""
@@ -99,55 +100,92 @@ class TechnicalIndicators:
         try:
             if len(prices) < slow_period + signal_period:
                 return 0.0, 0.0, 0.0  # Default if not enough data
-                
+            
             # Convert to numpy array for efficiency
             prices_array = np.array(prices)
-            
+        
             # Calculate EMAs
             ema_fast = TechnicalIndicators.calculate_ema(prices_array, fast_period)
             ema_slow = TechnicalIndicators.calculate_ema(prices_array, slow_period)
+        
+            # Ensure both arrays have the same length by trimming the longer one
+            if len(ema_fast) > len(ema_slow):
+                # Trim fast EMA to match slow EMA length
+                ema_fast = ema_fast[-len(ema_slow):]
+            elif len(ema_slow) > len(ema_fast):
+                # Trim slow EMA to match fast EMA length
+                ema_slow = ema_slow[-len(ema_fast):]
             
+            # Verify arrays have same shape before operations
+            if len(ema_fast) != len(ema_slow):
+                logger.logger.warning(f"EMA arrays still have different lengths after trimming: {len(ema_fast)} vs {len(ema_slow)}")
+                # Use a more robust fallback if arrays still don't match
+                return 0.0, 0.0, 0.0
+        
             # Calculate MACD line
             macd_line = ema_fast - ema_slow
-            
+        
             # Calculate Signal line (EMA of MACD line)
             signal_line = TechnicalIndicators.calculate_ema(macd_line, signal_period)
+        
+            # Ensure MACD line and signal line have compatible shapes for histogram calculation
+            if len(macd_line) > len(signal_line):
+                # Use only the overlapping portion for the histogram
+                macd_line_trimmed = macd_line[-len(signal_line):]
+                histogram = macd_line_trimmed - signal_line
+            elif len(signal_line) > len(macd_line):
+                # Use only the overlapping portion for the histogram
+                signal_line_trimmed = signal_line[-len(macd_line):]
+                histogram = macd_line - signal_line_trimmed
+            else:
+                # Same length, calculate normally
+                histogram = macd_line - signal_line
+        
+            # Safely get the last values
+            if len(macd_line) > 0 and len(signal_line) > 0 and len(histogram) > 0:
+                return macd_line[-1], signal_line[-1], histogram[-1]
+            else:
+                logger.logger.warning("Empty arrays in MACD calculation, returning defaults")
+                return 0.0, 0.0, 0.0
             
-            # Calculate histogram
-            histogram = macd_line - signal_line
-            
-            return macd_line[-1], signal_line[-1], histogram[-1]
         except Exception as e:
             logger.log_error("MACD Calculation", str(e))
+            logger.logger.error(f"MACD calculation failed: {str(e)}\nPrices length: {len(prices)}")
             return 0.0, 0.0, 0.0  # Return neutral MACD on error
     
     @staticmethod
     def calculate_ema(values: np.ndarray, period: int) -> np.ndarray:
         """
-        Calculate Exponential Moving Average with improved error handling
+        Calculate Exponential Moving Average with improved error handling and consistent output length
         """
         try:
             if len(values) == 0:
                 return np.array([0.0])  # Return a default value for empty arrays
-                
-            if len(values) < 2 * period:
-                # Pad with the first value if we don't have enough data
-                padding = np.full(2 * period - len(values), values[0])
-                values = np.concatenate((padding, values))
-                
+        
+            # For very short arrays, return simple moving average
+            if len(values) < period:
+                # If we have fewer values than the period, return a simple average
+                avg = np.mean(values)
+                return np.array([avg] * len(values))
+            
+            # Initialize EMA with SMA for the first 'period' elements
+            ema = np.zeros_like(values, dtype=float)
+            ema[:period] = np.mean(values[:period])
+        
+            # Calculate alpha (smoothing factor)
             alpha = 2 / (period + 1)
-            
-            # Calculate EMA
-            ema = np.zeros_like(values)
-            ema[0] = values[0]  # Initialize with first value
-            
-            for i in range(1, len(values)):
+        
+            # Calculate EMA for the rest of the array
+            for i in range(period, len(values)):
                 ema[i] = alpha * values[i] + (1 - alpha) * ema[i-1]
-                
+            
             return ema
+        
         except Exception as e:
             logger.log_error("EMA Calculation", str(e))
-            return np.array([values[0]]) if len(values) > 0 else np.array([0.0])
+            # Return an array of the same length as input, filled with the first value or zero
+            default_value = values[0] if len(values) > 0 else 0.0
+            return np.full(len(values), default_value)
     
     @staticmethod
     def calculate_bollinger_bands(prices: List[float], period: int = 20, num_std: float = 2.0) -> Tuple[float, float, float]:
@@ -1920,15 +1958,15 @@ class MachineLearningModels:
 class ClaudeEnhancedPrediction:
     """Class for generating Claude AI enhanced predictions"""
     
-    def __init__(self, api_key: str, model: str = "claude-3-7-sonnet-20250219"):
+    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20240620"):
         """Initialize Claude client with error handling"""
         try:
-            self.client = anthropic.Client(api_key=api_key)
+            self.llm_provider = anthropic.Client(api_key=api_key)
             self.model = model
             logger.logger.info(f"Claude Enhanced Prediction initialized with model: {model}")
         except Exception as e:
             logger.log_error("Claude Client Initialization", str(e))
-            self.client = None
+            self.llm_provider = None
             self.model = model
             logger.logger.warning("Failed to initialize Claude client, will fall back to basic predictions")
         
@@ -1949,7 +1987,7 @@ class ClaudeEnhancedPrediction:
         """
         try:
             # Check if client is available
-            if not self.client:
+            if not self.llm_provider:
                 logger.logger.warning("Claude client unavailable, falling back to combined prediction")
                 return self._generate_fallback_prediction(
                     token, current_price, technical_analysis, 
@@ -2212,7 +2250,7 @@ IMPORTANT: Provide ONLY the JSON response, no additional text.
             # Make the API call to Claude
             logger.logger.debug(f"Requesting Claude {timeframe} prediction for {token}")
             try:
-                response = self.client.messages.create(
+                response = self.llm_provider.messages.create(
                     model=self.model,
                     max_tokens=1000,
                     messages=[{"role": "user", "content": prompt}]
@@ -2625,19 +2663,22 @@ IMPORTANT: Provide ONLY the JSON response, no additional text.
 class PredictionEngine:
     """Main prediction engine class that combines all approaches with focus on reply functionality"""
     
-    def __init__(self, database, claude_api_key=None):
+    def __init__(self, database, llm_provider=None, claude_api_key=None):
         """Initialize the prediction engine with robust error handling"""
         try:
             self.db = database
-            self.claude_model = "claude-3-7-sonnet-20250219"
+            self.llm_provider_model = "claude-3-5-sonnet-20240620"
             
-            # Initialize Claude if API key provided
-            if claude_api_key:
-                logger.logger.info("Initializing Claude Enhanced Prediction with API key")
-                self.claude = ClaudeEnhancedPrediction(api_key=claude_api_key, model=self.claude_model)
+            # Use either the provided llm_provider or create one from the API key
+            if llm_provider:
+                self.llm_provider = llm_provider
+            elif claude_api_key:
+                # For backward compatibility
+                from llm_provider import LLMProvider
+                config = type('Config', (), {'CLAUDE_API_KEY': claude_api_key})
+                self.llm_provider = LLMProvider(config)
             else:
-                logger.logger.warning("No Claude API key provided, will use fallback prediction methods")
-                self.claude = None
+                self.llm_provider = None
                 
             # Track pending predictions to avoid duplicate processing
             self.pending_predictions = set()
@@ -2654,7 +2695,7 @@ class PredictionEngine:
             logger.log_error("Prediction Engine Initialization", str(e))
             logger.logger.error(f"Failed to initialize prediction engine: {str(e)}")
             self.db = database
-            self.claude = None
+            self.llm_provider = None
             self.pending_predictions = set()
             self.error_cooldowns = {}
             self.reply_ready_predictions = {}
@@ -2849,48 +2890,25 @@ class PredictionEngine:
                 logger.log_error(f"Prediction Performance - {token} ({timeframe})", str(perf_error))
                 recent_predictions = []
             
-            # Generate Claude-enhanced prediction if available
-            if self.claude:
-                try:
-                    logger.logger.debug(f"Generating Claude-enhanced {timeframe} prediction for {token}")
-                    prediction = self.claude.generate_enhanced_prediction(
-                        token=token,
-                        current_price=current_price,
-                        technical_analysis=tech_analysis,
-                        statistical_forecast=stat_forecast,
-                        ml_forecast=ml_forecast,
-                        timeframe=timeframe,
-                        price_history_24h=historical_data,
-                        market_conditions=market_conditions,
-                        recent_predictions=recent_predictions
-                    )
-                except Exception as claude_error:
-                    logger.log_error(f"Claude Prediction - {token} ({timeframe})", str(claude_error))
-                    logger.logger.error(f"Claude prediction failed for {token} ({timeframe}): {str(claude_error)}")
-                    # Combine predictions manually if Claude fails
-                    prediction = self._combine_predictions(
-                        token=token,
-                        current_price=current_price,
-                        technical_analysis=tech_analysis,
-                        statistical_forecast=stat_forecast,
-                        ml_forecast=ml_forecast,
-                        market_conditions=market_conditions,
-                        timeframe=timeframe
-                    )
-            else:
-                # Combine predictions manually if Claude not available
-                logger.logger.debug(f"Generating manually combined {timeframe} prediction for {token}")
-                prediction = self._combine_predictions(
-                    token=token,
-                    current_price=current_price,
-                    technical_analysis=tech_analysis,
-                    statistical_forecast=stat_forecast,
-                    ml_forecast=ml_forecast,
-                    market_conditions=market_conditions,
-                    timeframe=timeframe
-                )
-                
-            # Apply FOMO-inducing adjustments to the prediction
+            # Format the data for the LLM prompt
+            prompt = self._create_prediction_prompt(
+                token=token,
+                current_price=current_price,
+                technical_analysis=tech_analysis,
+                statistical_forecast=stat_forecast,
+                ml_forecast=ml_forecast,
+                timeframe=timeframe,
+                price_history_24h=historical_data,
+                market_conditions=market_conditions,
+                recent_predictions=recent_predictions
+            )
+
+            # Call the llm_provider to generate text
+            response_text = self.llm_provider.generate_text(prompt, max_tokens=1000)
+
+            # Parse the response into the prediction format
+            prediction = self._parse_llm_prediction_response(response_text, token, current_price, timeframe)    
+            
             try:
                 prediction = self._apply_fomo_enhancement(prediction, current_price, tech_analysis, timeframe)
             except Exception as fomo_error:
@@ -2941,7 +2959,636 @@ class PredictionEngine:
             
             # Return a simple fallback prediction
             return self._generate_fallback_prediction(token, market_data.get(token, {}), timeframe)
+
+    def _create_prediction_prompt(self, token: str, 
+                                  current_price: float,
+                                  technical_analysis: Dict[str, Any],
+                                  statistical_forecast: Dict[str, Any],
+                                  ml_forecast: Dict[str, Any],
+                                  timeframe: str = "1h",
+                                  price_history_24h: List[Dict[str, Any]] = None,
+                                  market_conditions: Dict[str, Any] = None,
+                                  recent_predictions: List[Dict[str, Any]] = None) -> str:
+        """
+        Create a prompt for the LLM to generate a prediction
+        Formats technical analysis, forecasts, and market data into a structured prompt
+        """
+        try:
+            # Extract key info from technical analysis with error handling
+            tech_signals = technical_analysis.get("signals", {})
+            overall_trend = technical_analysis.get("overall_trend", "neutral")
+            trend_strength = technical_analysis.get("trend_strength", 50)
+        
+            # Format forecasts with error handling
+            try:
+                # Extract statistical forecast
+                stat_forecast_values = statistical_forecast.get("forecast", [current_price])
+                stat_forecast = stat_forecast_values[0] if stat_forecast_values else current_price
             
+                stat_confidence = statistical_forecast.get("confidence_intervals", [])
+                if not stat_confidence:
+                    stat_confidence = [{"80": [current_price*0.98, current_price*1.02]}]
+            
+                # Extract ML forecast
+                ml_forecast_values = ml_forecast.get("forecast", [current_price])
+                ml_forecast_val = ml_forecast_values[0] if ml_forecast_values else current_price
+            
+                ml_confidence = ml_forecast.get("confidence_intervals", [])
+                if not ml_confidence:
+                    ml_confidence = [{"80": [current_price*0.98, current_price*1.02]}]
+            
+                # Calculate average forecast
+                avg_forecast = (stat_forecast + ml_forecast_val) / 2
+            except Exception as forecast_error:
+                logger.log_error("Prompt Forecast Extraction", str(forecast_error))
+                # Use current price as fallback
+                stat_forecast = current_price
+                ml_forecast_val = current_price
+                avg_forecast = current_price
+                stat_confidence = [{"80": [current_price*0.98, current_price*1.02]}]
+                ml_confidence = [{"80": [current_price*0.98, current_price*1.02]}]
+        
+            # Prepare historical context
+            historical_context = ""
+            try:
+                if price_history_24h:
+                    # Get min and max prices over 24h
+                    prices = [entry.get("price", 0) for entry in price_history_24h]
+                    volumes = [entry.get("volume", 0) for entry in price_history_24h]
+                
+                    if prices:
+                        min_price = min(prices)
+                        max_price = max(prices)
+                        avg_price = sum(prices) / len(prices)
+                        total_volume = sum(volumes)
+                    
+                        # Adjust display based on timeframe
+                        if timeframe == "1h":
+                            period_desc = "24-Hour"
+                        elif timeframe == "24h":
+                            period_desc = "7-Day"
+                        else:  # 7d
+                            period_desc = "30-Day"
+                        
+                        historical_context = f"""
+    {period_desc} Price Data:
+    - Current: ${current_price}
+    - Average: ${avg_price}
+    - High: ${max_price}
+    - Low: ${min_price}
+    - Range: ${max_price - min_price} ({((max_price - min_price) / min_price) * 100:.2f}%)
+    - Total Volume: ${total_volume}
+    """
+            except Exception as history_error:
+                logger.log_error("Prompt Historical Context", str(history_error))
+                historical_context = ""
+        
+            # Market conditions context
+            market_context = ""
+            try:
+                if market_conditions:
+                    market_context = f"""
+    Market Conditions:
+    - Overall market trend: {market_conditions.get('market_trend', 'unknown')}
+    - BTC dominance: {market_conditions.get('btc_dominance', 'unknown')}
+    - Market volatility: {market_conditions.get('market_volatility', 'unknown')}
+    - Sector performance: {market_conditions.get('sector_performance', 'unknown')}
+    """
+            except Exception as market_error:
+                logger.log_error("Prompt Market Context", str(market_error))
+                market_context = ""
+            
+            # Accuracy context
+            accuracy_context = ""
+            try:
+                if recent_predictions:
+                    correct_predictions = [p for p in recent_predictions if p.get("was_correct")]
+                    accuracy_rate = len(correct_predictions) / len(recent_predictions) if recent_predictions else 0
+                
+                    accuracy_context = f"""
+    Recent Prediction Performance:
+    - Accuracy rate for {timeframe} predictions: {accuracy_rate * 100:.1f}%
+    - Total predictions: {len(recent_predictions)}
+    - Correct predictions: {len(correct_predictions)}
+    """
+            except Exception as accuracy_error:
+                logger.log_error("Prompt Accuracy Context", str(accuracy_error))
+                accuracy_context = ""
+            
+            # Get additional technical indicators for longer timeframes
+            additional_indicators = ""
+            try:
+                if timeframe in ["24h", "7d"] and "indicators" in technical_analysis:
+                    indicators = technical_analysis["indicators"]
+                
+                    # Add ADX if available
+                    if "adx" in indicators:
+                        additional_indicators += f"- ADX: {indicators['adx']:.2f}\n"
+                    
+                    # Add Ichimoku Cloud if available
+                    if "ichimoku" in indicators:
+                        ichimoku = indicators["ichimoku"]
+                        additional_indicators += "- Ichimoku Cloud:\n"
+                        additional_indicators += f"  - Tenkan-sen: {ichimoku['tenkan_sen']:.4f}\n"
+                        additional_indicators += f"  - Kijun-sen: {ichimoku['kijun_sen']:.4f}\n"
+                        additional_indicators += f"  - Senkou Span A: {ichimoku['senkou_span_a']:.4f}\n"
+                        additional_indicators += f"  - Senkou Span B: {ichimoku['senkou_span_b']:.4f}\n"
+                    
+                    # Add Pivot Points if available
+                    if "pivot_points" in indicators:
+                        pivots = indicators["pivot_points"]
+                        additional_indicators += "- Pivot Points:\n"
+                        additional_indicators += f"  - Pivot: {pivots['pivot']:.4f}\n"
+                        additional_indicators += f"  - R1: {pivots['r1']:.4f}, R2: {pivots['r2']:.4f}\n"
+                        additional_indicators += f"  - S1: {pivots['s1']:.4f}, S2: {pivots['s2']:.4f}\n"
+            except Exception as indicators_error:
+                logger.log_error("Prompt Additional Indicators", str(indicators_error))
+                additional_indicators = ""
+        
+            # Calculate optimal confidence interval for FOMO generation
+            try:
+                # Get volatility - default to moderate if not available
+                current_volatility = technical_analysis.get("volatility", 5.0)
+            
+                # Scale confidence interval based on volatility, trend strength, and timeframe
+                # Higher volatility = wider interval
+                # Stronger trend = narrower interval (more confident)
+                # Longer timeframe = wider interval
+                volatility_factor = min(1.5, max(0.5, current_volatility / 10))
+                trend_factor = max(0.7, min(1.3, 1.2 - (trend_strength / 100)))
+            
+                # Timeframe factor - wider intervals for longer timeframes
+                if timeframe == "1h":
+                    timeframe_factor = 1.0
+                elif timeframe == "24h":
+                    timeframe_factor = 1.5
+                else:  # 7d
+                    timeframe_factor = 2.0
+                
+                # Calculate confidence bounds
+                bound_factor = volatility_factor * trend_factor * timeframe_factor
+                lower_bound = avg_forecast * (1 - 0.015 * bound_factor)
+                upper_bound = avg_forecast * (1 + 0.015 * bound_factor)
+            
+                # Ensure bounds are narrow enough to create FOMO but realistic for the timeframe
+                price_range_pct = (upper_bound - lower_bound) / current_price * 100
+            
+                # Adjust max range based on timeframe
+                max_range_pct = {
+                    "1h": 3.0,   # 3% for 1 hour
+                    "24h": 8.0,  # 8% for 24 hours
+                    "7d": 15.0   # 15% for 7 days
+                }.get(timeframe, 3.0)
+            
+                if price_range_pct > max_range_pct:
+                    # Too wide - recalculate to create FOMO
+                    center = (upper_bound + lower_bound) / 2
+                    margin = (current_price * max_range_pct / 200)  # half of max_range_pct
+                    upper_bound = center + margin
+                    lower_bound = center - margin
+            except Exception as bounds_error:
+                logger.log_error("Prompt Bounds Calculation", str(bounds_error))
+                # Fallback to simple percentage bounds
+                if timeframe == "1h":
+                    margin = 0.015  # 1.5%
+                elif timeframe == "24h":
+                    margin = 0.04   # 4%
+                else:  # 7d
+                    margin = 0.075  # 7.5%
+                lower_bound = avg_forecast * (1 - margin)
+                upper_bound = avg_forecast * (1 + margin)
+            
+            # Timeframe-specific guidance for FOMO generation
+            fomo_guidance = {
+                "1h": "Focus on immediate catalysts and short-term technical breakouts for this 1-hour prediction.",
+                "24h": "Emphasize day-trading patterns and 24-hour potential for this daily prediction.",
+                "7d": "Highlight medium-term trend confirmation and key weekly support/resistance levels."
+            }.get(timeframe, "")
+        
+            # Build the prompt for the LLM
+            prompt = f"""
+    You are a sophisticated crypto market prediction expert. I need your analysis to make a precise {timeframe} prediction for {token}.
+
+    ## Technical Analysis
+    - RSI Signal: {tech_signals.get('rsi', 'neutral')}
+    - MACD Signal: {tech_signals.get('macd', 'neutral')}
+    - Bollinger Bands: {tech_signals.get('bollinger_bands', 'neutral')}
+    - Stochastic Oscillator: {tech_signals.get('stochastic', 'neutral')}
+    - Overall Trend: {overall_trend}
+    - Trend Strength: {trend_strength}/100
+    {additional_indicators}
+
+    ## Statistical Models
+    - Forecast: ${stat_forecast:.4f}
+    - 80% Confidence: [${stat_confidence[0]['80'][0]:.4f}, ${stat_confidence[0]['80'][1]:.4f}]
+
+    ## Machine Learning Models
+    - ML Forecast: ${ml_forecast_val:.4f}
+    - 80% Confidence: [${ml_confidence[0]['80'][0]:.4f}, ${ml_confidence[0]['80'][1]:.4f}]
+
+    ## Current Market Data
+    - Current Price: ${current_price}
+    - Predicted Range: [${lower_bound:.4f}, ${upper_bound:.4f}]
+
+    {historical_context}
+    {market_context}
+    {accuracy_context}
+
+    ## Prediction Task
+    1. Predict the EXACT price of {token} in {timeframe} with a confidence level between 65-85%.
+    2. Provide a narrow price range to create FOMO, but ensure it's realistic given the data and {timeframe} timeframe.
+    3. State the percentage change you expect.
+    4. Give a concise rationale (2-3 sentences maximum).
+    5. Assign a sentiment: BULLISH, BEARISH, or NEUTRAL.
+
+    {fomo_guidance}
+
+    Your prediction must follow this EXACT JSON format:
+    {{
+      "prediction": {{
+        "price": [exact price prediction],
+        "confidence": [confidence percentage],
+        "lower_bound": [lower price bound],
+        "upper_bound": [upper price bound],
+        "percent_change": [expected percentage change],
+        "timeframe": "{timeframe}"
+      }},
+      "rationale": [brief explanation],
+      "sentiment": [BULLISH/BEARISH/NEUTRAL],
+      "key_factors": [list of 2-3 main factors influencing this prediction]
+    }}
+
+    Your prediction should be precise, data-driven, and conservative enough to be accurate while narrow enough to generate excitement.
+    IMPORTANT: Provide ONLY the JSON response, no additional text.
+    """
+        
+            return prompt
+        
+        except Exception as e:
+            logger.log_error("Create Prediction Prompt", str(e))
+            # Return a simplified prompt as fallback
+            return f"""
+    Generate a price prediction for {token} in the next {timeframe}.
+    Current price: ${current_price}
+
+    Provide your answer in JSON format with prediction price, confidence level, bounds, percent change, rationale, sentiment, and key factors.
+    """
+    
+    def _parse_llm_prediction_response(self, result_text: str, token: str, current_price: float, timeframe: str) -> Dict[str, Any]:
+        """
+        Parse the LLM's prediction response into a structured prediction dictionary
+        Handles error cases and provides fallbacks when parsing fails
+        """
+        try:
+            # Initialize result to None outside of try blocks
+            result = None
+            original_text = result_text
+        
+            # Clean up the response text
+            result_text = result_text.replace("```json", "").replace("```", "").strip()
+        
+            # Try direct JSON parsing first
+            try:
+                result = json.loads(result_text)
+            except json.JSONDecodeError as e:
+                error_msg = str(e)
+                logger.logger.debug(f"Initial JSON parsing failed: {error_msg}")
+            
+                # Begin a series of increasingly aggressive cleanup attempts
+            
+                # 1. Try basic cleanup first - add quotes to property names
+                try:
+                    # Add quotes to property names
+                    cleaned_text = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', result_text)
+                    result = json.loads(cleaned_text)
+                    logger.logger.info("JSON parsed after adding quotes to property names")
+                except json.JSONDecodeError:
+                    # 2. Try fixing quoted values next
+                    try:
+                        # Fix unquoted string values (known enums)
+                        cleaned_text = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', result_text)
+                        cleaned_text = re.sub(r':\s*(BULLISH|BEARISH|NEUTRAL)([,}\s])', r': "\1"\2', cleaned_text)
+                        cleaned_text = re.sub(r':\s*([a-zA-Z][a-zA-Z0-9_]*)([,}\s])', r': "\1"\2', cleaned_text)
+                        result = json.loads(cleaned_text)
+                        logger.logger.info("JSON parsed after fixing quoted values")
+                    except json.JSONDecodeError:
+                        # 3. Try fixing commas
+                        try:
+                            cleaned_text = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', result_text)
+                            cleaned_text = re.sub(r':\s*(BULLISH|BEARISH|NEUTRAL)([,}\s])', r': "\1"\2', cleaned_text)
+                            cleaned_text = re.sub(r':\s*([a-zA-Z][a-zA-Z0-9_]*)([,}\s])', r': "\1"\2', cleaned_text)
+                            cleaned_text = re.sub(r',\s*}', '}', cleaned_text)
+                            cleaned_text = re.sub(r',\s*]', ']', cleaned_text)
+                            cleaned_text = re.sub(r',\s*,', ',', cleaned_text)
+                            result = json.loads(cleaned_text)
+                            logger.logger.info("JSON parsed after fixing commas")
+                        except json.JSONDecodeError:
+                            # 4. Try a more targeted approach based on the error
+                            if "Expecting property name enclosed in double quotes" in error_msg:
+                                try:
+                                    # Find the position from the error message
+                                    match = re.search(r'char (\d+)', error_msg)
+                                    if match:
+                                        pos = int(match.group(1))
+                                    
+                                        # Extract problematic section around the position
+                                        start = max(0, pos - 20)
+                                        end = min(len(result_text), pos + 20)
+                                        problem_section = result_text[start:end]
+                                        logger.logger.debug(f"Problem section around pos {pos}: {problem_section}")
+                                    
+                                        # Use JavaScript-style object to JSON conversion
+                                        js_style_fixed = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', result_text)
+                                        result = json.loads(js_style_fixed)
+                                        logger.logger.info("JSON parsed after fixing JS-style properties")
+                                    else:
+                                        # Apply more aggressive fixes if we can't pinpoint the position
+                                        fixed = re.sub(r'([{,])\s*([^"\s{}\[\],]+)\s*:', r'\1"\2":', result_text)
+                                        result = json.loads(fixed)
+                                        logger.logger.info("JSON parsed with aggressive property fixing")
+                                except json.JSONDecodeError:
+                                    # 5. Try replacing single quotes with double quotes
+                                    try:
+                                        # Single quotes might be used instead of double quotes
+                                        cleaned_text = result_text.replace("'", '"')
+                                        result = json.loads(cleaned_text)
+                                        logger.logger.info("JSON parsed after replacing single quotes")
+                                    except json.JSONDecodeError:
+                                        # 6. Try a full JSON repair as last parsing attempt
+                                        try:
+                                            # Last resort - full repair
+                                            repaired_text = self._full_json_repair(result_text)
+                                            result = json.loads(repaired_text)
+                                            logger.logger.info("JSON parsed after full repair")
+                                        except Exception:
+                                            logger.logger.warning("All JSON parsing attempts failed")
+                                            result = None
+                            elif "Expecting ',' delimiter" in error_msg:
+                                try:
+                                    # Try to fix delimiter issues
+                                    cleaned_text = re.sub(r'([}\]])\s*([{\[])', r'\1,\2', result_text)
+                                    result = json.loads(cleaned_text)
+                                    logger.logger.info("JSON parsed after fixing missing commas")
+                                except json.JSONDecodeError:
+                                    try:
+                                        # Apply full repairs
+                                        repaired_text = self._full_json_repair(result_text)
+                                        result = json.loads(repaired_text)
+                                        logger.logger.info("JSON parsed after full repair")
+                                    except Exception:
+                                        logger.logger.warning("All JSON parsing attempts failed")
+                                        result = None
+                            else:
+                                # For other JSON errors, try full repair
+                                try:
+                                    repaired_text = self._full_json_repair(result_text)
+                                    result = json.loads(repaired_text)
+                                    logger.logger.info("JSON parsed after full repair")
+                                except Exception:
+                                    logger.logger.warning("All JSON parsing attempts failed")
+                                    result = None
+        
+            # If all parsing attempts failed, use fallback
+            if result is None:
+                logger.logger.warning("All JSON parsing attempts failed, using fallback prediction")
+                # Save the problematic text for debugging
+                debug_filename = f"failed_json_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                try:
+                    with open(debug_filename, 'w') as f:
+                        f.write(f"Original text:\n{original_text}\n\nCleaned text:\n{result_text}")
+                    logger.logger.debug(f"Saved problematic JSON to {debug_filename}")
+                except Exception as write_error:
+                    logger.logger.debug(f"Failed to write debug file: {str(write_error)}")
+                
+                return self._combine_predictions(
+                    token=token,
+                    current_price=current_price,
+                    technical_analysis={
+                        "overall_trend": "neutral",
+                        "trend_strength": 50,
+                        "signals": {
+                            "rsi": "neutral",
+                            "macd": "neutral",
+                            "bollinger_bands": "neutral",
+                            "stochastic": "neutral"
+                        }
+                    },
+                    statistical_forecast={"forecast": [current_price]},
+                    ml_forecast={"forecast": [current_price]},
+                    market_conditions={},
+                    timeframe=timeframe
+                )
+                
+            # Validate the structure of the response
+            if not isinstance(result, dict):
+                logger.logger.warning("LLM didn't return a dictionary response")
+                result = {
+                    "prediction": {
+                        "price": current_price * 1.01,  # Default 1% up
+                        "confidence": 60.0,
+                        "lower_bound": current_price * 0.99,
+                        "upper_bound": current_price * 1.03,
+                        "percent_change": 1.0,
+                        "timeframe": timeframe
+                    },
+                    "rationale": f"Based on technical analysis for {token} over {timeframe}.",
+                    "sentiment": "NEUTRAL",
+                    "key_factors": ["Technical analysis", "Market conditions", "Price momentum"]
+                }
+
+            # Ensure prediction field exists
+            if "prediction" not in result:
+                logger.logger.warning("Response missing 'prediction' field")
+                result["prediction"] = {
+                    "price": current_price * 1.01,
+                    "confidence": 60.0,
+                    "lower_bound": current_price * 0.99,
+                    "upper_bound": current_price * 1.03,
+                    "percent_change": 1.0,
+                    "timeframe": timeframe
+                }
+        
+            # Check if prediction contains all required fields and fix if missing
+            required_fields = ["price", "confidence", "lower_bound", "upper_bound", "percent_change", "timeframe"]
+            default_values = {
+                "price": current_price * 1.01,
+                "confidence": 60.0,
+                "lower_bound": current_price * 0.99,
+                "upper_bound": current_price * 1.03,
+                "percent_change": 1.0,
+                "timeframe": timeframe
+            }
+        
+            for field in required_fields:
+                if field not in result["prediction"]:
+                    logger.logger.warning(f"Prediction missing '{field}' field, using default")
+                    result["prediction"][field] = default_values[field]
+            
+            # Validate that prediction values are numeric and fix if not
+            for field in ["price", "confidence", "lower_bound", "upper_bound", "percent_change"]:
+                val = result["prediction"][field]
+                if not isinstance(val, (int, float)):
+                    logger.logger.warning(f"Field '{field}' is not numeric: {val}, using default")
+                    result["prediction"][field] = default_values[field]
+
+            # Ensure other required fields exist
+            if "rationale" not in result:
+                result["rationale"] = f"Based on technical analysis for {token} over {timeframe}."
+        
+            if "sentiment" not in result:
+                # Derive sentiment from percent change
+                pct_change = result["prediction"]["percent_change"]
+                if pct_change > 1.0:
+                    result["sentiment"] = "BULLISH"
+                elif pct_change < -1.0:
+                    result["sentiment"] = "BEARISH"
+                else:
+                    result["sentiment"] = "NEUTRAL"
+
+            if "key_factors" not in result or not isinstance(result["key_factors"], list):
+                result["key_factors"] = ["Technical analysis", "Market conditions", "Price momentum"]
+
+            # Ensure the prediction is within reasonable bounds
+            pred_price = result["prediction"]["price"]
+
+            # Check for unreasonable predictions (more than 50% change)
+            if abs((pred_price / current_price) - 1) > 0.5:
+                logger.logger.warning(f"LLM predicted unreasonable price change for {token}: {pred_price} (current: {current_price})")
+                # Adjust to a more reasonable prediction
+                if pred_price > current_price:
+                    result["prediction"]["price"] = current_price * 1.05  # 5% increase
+                else:
+                    result["prediction"]["price"] = current_price * 0.95  # 5% decrease
+        
+                # Update percent change
+                result["prediction"]["percent_change"] = ((result["prediction"]["price"] / current_price) - 1) * 100
+
+            # Add the model weightings that produced this prediction
+            result["model_weights"] = {
+                "technical_analysis": 0.25,
+                "statistical_models": 0.25,
+                "machine_learning": 0.25,
+                "client_enhanced": 0.25
+            }
+
+            return result
+
+        except Exception as e:
+            # Log detailed error
+            error_msg = f"Parse LLM Prediction Response: {str(e)}"
+            logger.log_error("Parse LLM Response", error_msg)
+            logger.logger.debug(f"Failed to parse response: {result_text[:200]}...")
+
+            # Try to extract a price prediction from the text if it's a simple float
+            try:
+                # If LLM returned just a number, use it as the price
+                if isinstance(result_text, str) and result_text.strip().replace('.', '', 1).isdigit():
+                    predicted_price = float(result_text.strip())
+        
+                    # Create proper JSON structure
+                    result = {
+                        "prediction": {
+                            "price": predicted_price,
+                            "confidence": 70.0,
+                            "lower_bound": predicted_price * 0.98,
+                            "upper_bound": predicted_price * 1.02,
+                            "percent_change": ((predicted_price / current_price) - 1) * 100,
+                            "timeframe": timeframe
+                        },
+                        "rationale": f"Technical indicators and market patterns suggest this price target for {token} in the next {timeframe}.",
+                        "sentiment": "BULLISH" if predicted_price > current_price else "BEARISH" if predicted_price < current_price else "NEUTRAL",
+                        "key_factors": ["Technical analysis", "Market trends", "Price momentum"]
+                    }
+                    return result
+            except:
+                pass
+
+            # Fall back to combined prediction
+            return self._combine_predictions(
+                token=token,
+                current_price=current_price,
+                technical_analysis={
+                    "overall_trend": "neutral",
+                    "trend_strength": 50,
+                    "signals": {
+                        "rsi": "neutral",
+                        "macd": "neutral",
+                        "bollinger_bands": "neutral",
+                        "stochastic": "neutral"
+                    }
+                },
+                statistical_forecast={"forecast": [current_price]},
+                ml_forecast={"forecast": [current_price]},
+                market_conditions={},
+                timeframe=timeframe
+            )
+
+    def _full_json_repair(self, text: str) -> str:
+        """
+        Comprehensive JSON repair function for severely malformed JSON
+        Particularly addresses the issue of missing quotes around property names
+        """
+        # First clean obvious syntax issues
+        text = text.strip()
+        if text.startswith("```") and text.endswith("```"):
+            text = text[3:-3].strip()
+        
+        # Replace JavaScript-style property names with proper JSON
+        # This regex matches property names not in quotes and adds double quotes
+        text = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', text)
+    
+        # Fix unquoted string values (specifically for known enum values)
+        text = re.sub(r':\s*(BULLISH|BEARISH|NEUTRAL)([,}\s])', r': "\1"\2', text)
+    
+        # Fix common array syntax issues
+        text = re.sub(r'\[\s*,', '[', text)  # Remove leading commas in arrays
+        text = re.sub(r',\s*\]', ']', text)  # Remove trailing commas in arrays
+    
+        # Fix object syntax issues
+        text = re.sub(r'{\s*,', '{', text)   # Remove leading commas in objects
+        text = re.sub(r',\s*}', '}', text)   # Remove trailing commas in objects
+    
+        # Fix double commas
+        text = re.sub(r',\s*,', ',', text)
+    
+        # Fix missing commas between array elements
+        text = re.sub(r'(true|false|null|"[^"]*"|[0-9.]+)\s+("|\{|\[|true|false|null|[0-9.])', r'\1, \2', text)
+    
+        # Fix unquoted strings that should be quoted (more general case)
+        text = re.sub(r':\s*([a-zA-Z][a-zA-Z0-9_]*)([,}\s])', r': "\1"\2', text)
+    
+        # In case any single quotes were used instead of double quotes
+        text = text.replace("'", '"')
+    
+        # Final catch-all for any remaining unquoted property names
+        text = re.sub(r'([{,])\s*([^"\s{}\[\],]+)\s*:', r'\1"\2":', text)
+    
+        return text
+
+    def _fix_json_array(self, match) -> str:
+        """Helper method to fix JSON arrays"""
+        array_content = match.group(1)
+    
+        # If the array is empty, return it as is
+        if not array_content.strip():
+            return '[]'
+    
+        # Split by commas not inside quotes
+        items = re.findall(r'"[^"]*"|[^,]+', array_content)
+        items = [item.strip() for item in items if item.strip()]
+    
+        # Ensure each item is properly quoted if it's not a number
+        processed_items = []
+        for item in items:
+            # If already quoted or is a number, leave as is
+            if (item.startswith('"') and item.endswith('"')) or re.match(r'^-?\d+(\.\d+)?$', item):
+                processed_items.append(item)
+            else:
+                # Quote the item
+                processed_items.append(f'"{item}"')
+    
+        return '[' + ', '.join(processed_items) + ']'
+
     def _cache_prediction(self, token: str, timeframe: str, prediction: Dict[str, Any]) -> None:
         """Cache a prediction for quick retrieval for reply functionality"""
         cache_key = f"{token}_{timeframe}"
