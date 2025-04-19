@@ -5,13 +5,14 @@ from typing import Dict, List, Tuple, Set, Optional, Any
 import re
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import string
 from collections import Counter
 import statistics
 import random
 
 from utils.logger import logger
+from datetime_utils import ensure_naive_datetimes, strip_timezone, safe_datetime_diff
 
 class ContentAnalyzer:
     """Enhanced content analyzer focused on social engagement and replies"""
@@ -20,6 +21,7 @@ class ContentAnalyzer:
         """Initialize the content analyzer with expanded detection capabilities"""
         self.config = config
         self.db = db
+        self.llm_provider = None  # Will be set if needed
         
         # Initialize keyword sets optimized for conversation detection
         self._initialize_keywords()
@@ -64,7 +66,7 @@ class ContentAnalyzer:
             'phrases': Counter(),
             'sentiment': Counter()
         }
-        self.trending_reset_time = datetime.now()
+        self.trending_reset_time = self._strip_timezone(datetime.now())
         self.trending_reset_hours = 4
         
         # Tracking for conversation state
@@ -75,8 +77,69 @@ class ContentAnalyzer:
         self.recent_mentions = []
         self.max_recent_mentions = 100
         
+        # Market-related keywords for detecting market posts
+        self.market_keywords = {
+            # Crypto specific
+            'crypto': [
+                'bitcoin', 'btc', 'eth', 'ethereum', 'sol', 'solana', 'bnb', 'binance', 'xrp', 'ripple',
+                'avax', 'avalanche', 'doge', 'dogecoin', 'shib', 'ada', 'cardano', 'dot', 'polkadot',
+                'blockchain', 'defi', 'nft', 'crypto', 'token', 'altcoin', 'coin', 'web3', 'wallet',
+                'exchange', 'hodl', 'mining', 'staking', 'smart contract', 'airdrop'
+            ],
+            
+            # General finance
+            'finance': [
+                'market', 'stock', 'trade', 'trading', 'price', 'chart', 'analysis', 'technical',
+                'fundamental', 'invest', 'investment', 'fund', 'capital', 'bull', 'bear', 'rally',
+                'crash', 'correction', 'resistance', 'support', 'volume', 'liquidity', 'volatility',
+                'trend', 'breakout', 'sell', 'buy', 'long', 'short', 'profit', 'loss', 'roi', 'yield'
+            ],
+            
+            # Finance symbols
+            'symbols': ['$', '€', '£', '¥']
+        }
+        
         logger.logger.info("Enhanced content analyzer initialized")
     
+    def _strip_timezone(self, dt):
+        """Helper method to convert datetime to naive"""
+        if dt is None:
+            return dt
+        if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+            # Convert to UTC then remove tzinfo
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    
+    def ensure_naive_datetimes(func):
+        """
+        Decorator to ensure all datetime objects passed to a function are timezone-naive.
+        Place this decorator on methods that compare or operate on datetime objects.
+        """
+        def wrapper(self, *args, **kwargs):
+            # Process args
+            new_args = []
+            for arg in args:
+                if isinstance(arg, datetime):
+                    arg = self._strip_timezone(arg)
+                new_args.append(arg)
+        
+            # Process kwargs
+            new_kwargs = {}
+            for key, value in kwargs.items():
+                if isinstance(value, datetime):
+                    value = self._strip_timezone(value)
+                new_kwargs[key] = value
+        
+            # Call the original function with sanitized datetimes
+            return func(self, *new_args, **new_kwargs)
+        return wrapper
+
+    def _safe_datetime_diff(self, dt1, dt2):
+        """Safely calculate time difference between two datetime objects in seconds"""
+        dt1 = self._strip_timezone(dt1)
+        dt2 = self._strip_timezone(dt2)
+        return (dt1 - dt2).total_seconds()
+
     def _initialize_keywords(self) -> None:
         """Initialize expanded keyword sets for better conversation detection"""
         
@@ -227,7 +290,8 @@ class ContentAnalyzer:
                 'meme_phrases': self._detect_meme_phrases(post_text),
                 'conversation_hooks': self._detect_conversation_hooks(post_text),
                 'tone': self._analyze_tone(post_text),
-                'sentiment': self._analyze_sentiment(post_text)
+                'sentiment': self._analyze_sentiment(post_text),
+                'text': post_text  # Include original text for reference
             }
 
             # Calculate engagement scores
@@ -269,7 +333,7 @@ class ContentAnalyzer:
                 'engagement_scores': engagement_scores,
                 'state': state_features,
                 'response_focus': response_focus,
-                'analyzed_at': datetime.now()
+                'analyzed_at': self._strip_timezone(datetime.now())
             }
 
             # Store analysis if database available
@@ -281,6 +345,282 @@ class ContentAnalyzer:
         except Exception as e:
             logger.log_error("Post Analysis", str(e))
             return {'reply_worthy': False, 'error': str(e)}
+
+    def find_market_related_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter posts to only include those related to markets with enhanced detection
+        
+        Args:
+            posts: List of post data dictionaries
+            
+        Returns:
+            Filtered list of market-related posts
+        """
+        if not posts:
+            logger.logger.warning("No posts provided to filter for market relevance")
+            return []
+            
+        logger.logger.info(f"Filtering {len(posts)} posts for market relevance")
+        
+        # Flatten the keywords for efficient matching
+        all_keywords = []
+        for category in self.market_keywords.values():
+            all_keywords.extend(category)
+        
+        # Store matched posts with their relevance score
+        market_related = []
+        
+        for post in posts:
+            post_text = post.get('text', '').lower() if post.get('text') else ''
+            
+            # Skip posts with no text
+            if not post_text:
+                continue
+                
+            # Track matched keywords for logging
+            matched_keywords = []
+            keyword_categories = set()
+            
+            # Basic keyword matching with categorization
+            for category, keywords in self.market_keywords.items():
+                for keyword in keywords:
+                    if keyword in post_text:
+                        matched_keywords.append(keyword)
+                        keyword_categories.add(category)
+            
+            # Price pattern matching (e.g., "$45.2K" or "45,000 USDT")
+            price_patterns = [
+                r'\$\d+[,.]?\d*[KMB]?',  # $45K, $45.2K
+                r'\d+[,.]?\d*\s*[$€£¥]',  # 45.2 $, 45,000 €
+                r'\d+[,.]?\d*\s*usdt',    # 45000 USDT
+                r'\d+[,.]?\d*\s*usd',     # 45000 USD
+                r'\d+[,.]\d*\s*eth',      # 0.05 ETH
+                r'\d+[,.]\d*\s*btc'       # 0.01 BTC
+            ]
+            
+            for pattern in price_patterns:
+                if re.search(pattern, post_text, re.IGNORECASE):
+                    matched_keywords.append("price_pattern")
+                    keyword_categories.add('finance')
+                    break
+            
+            # Percentage change patterns
+            percentage_patterns = [
+                r'[+-]?\d+(\.\d+)?%',         # +5%, -10.5%
+                r'up\s+\d+(\.\d+)?%',         # up 5%
+                r'down\s+\d+(\.\d+)?%',       # down 10.5%
+                r'gained\s+\d+(\.\d+)?%',     # gained 5%
+                r'lost\s+\d+(\.\d+)?%',       # lost 10.5%
+                r'increased\s+\d+(\.\d+)?%',  # increased 5%
+                r'decreased\s+\d+(\.\d+)?%',  # decreased 10.5%
+            ]
+            
+            for pattern in percentage_patterns:
+                if re.search(pattern, post_text, re.IGNORECASE):
+                    matched_keywords.append("percentage_change")
+                    keyword_categories.add('finance')
+                    break
+                    
+            # Also check hashtags if available
+            if 'content_analysis' in post and 'hashtags' in post['content_analysis']:
+                hashtags = post['content_analysis']['hashtags']
+                for tag in hashtags:
+                    tag = tag.lower()
+                    if any(keyword in tag for keyword in all_keywords):
+                        matched_keywords.append(f"hashtag:{tag}")
+                        # Determine category of the hashtag
+                        for cat, keywords in self.market_keywords.items():
+                            if any(keyword in tag for keyword in keywords):
+                                keyword_categories.add(cat)
+            
+            # Calculate relevance score based on matches
+            relevance_score = 0
+            
+            # Base score from number of matches
+            relevance_score += min(10, len(matched_keywords))
+            
+            # Bonus for matching multiple categories
+            relevance_score += len(keyword_categories) * 3
+            
+            # Bonus for having both crypto and finance terms (high relevance)
+            if 'crypto' in keyword_categories and 'finance' in keyword_categories:
+                relevance_score += 5
+            
+            # Mark as market related if we found any matches and score is high enough
+            if matched_keywords and relevance_score >= 3:
+                # Add relevant fields to the post
+                post['market_related'] = True
+                post['market_keywords'] = matched_keywords
+                post['market_categories'] = list(keyword_categories)
+                post['market_relevance_score'] = relevance_score
+                market_related.append(post)
+                
+        logger.logger.info(f"Found {len(market_related)} market-related posts out of {len(posts)}")
+        
+        # Log some example keywords for debugging
+        if market_related:
+            examples = [p.get('market_keywords', [])[:3] for p in market_related[:3]]
+            logger.logger.debug(f"Example keywords matched: {examples}")
+        
+        # Sort by relevance score (highest first)
+        market_related.sort(key=lambda x: x.get('market_relevance_score', 0), reverse=True)
+        
+        return market_related
+        
+    def filter_already_replied_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter out posts we've already replied to. Handles missing database methods gracefully.
+        
+        Args:
+            posts: List of post data dictionaries
+            
+        Returns:
+            Filtered list of posts
+        """
+        if not posts:
+            logger.logger.warning("No posts provided to filter for replies")
+            return []
+            
+        logger.logger.info(f"Filtering {len(posts)} posts for ones we haven't replied to yet")
+        
+        filtered_posts = []
+        
+        for post in posts:
+            post_id = post.get('post_id')
+            post_url = post.get('post_url')
+            
+            # Skip posts with no ID or URL
+            if not post_id and not post_url:
+                continue
+            
+            # Check if we've already replied to this post
+            already_replied = False
+            
+            try:
+                # Try using the database method if it exists
+                if self.db and hasattr(self.db, 'check_if_post_replied'):
+                    already_replied = self.db.check_if_post_replied(post_id, post_url)
+                else:
+                    # Fallback method if database function doesn't exist
+                    already_replied = self._check_if_post_replied_fallback(post_id, post_url)
+            except Exception as e:
+                logger.logger.warning(f"Error checking if post was replied to: {str(e)}")
+                # Fall back to checking locally
+                already_replied = False
+            
+            if not already_replied:
+                filtered_posts.append(post)
+        
+        logger.logger.info(f"Filtered out {len(posts) - len(filtered_posts)} already replied posts")
+        return filtered_posts
+    
+    def _check_if_post_replied_fallback(self, post_id: str, post_url: str) -> bool:
+        """
+        Fallback method to check if a post has been replied to when database method is unavailable
+        
+        Args:
+            post_id: The ID of the post
+            post_url: The URL of the post
+            
+        Returns:
+            True if we've replied to this post, False otherwise
+        """
+        # Without proper database support, we assume not replied
+        # This is a placeholder for a proper implementation
+        
+        # In a real implementation, we could check:
+        # 1. Local memory cache of replied posts
+        # 2. Simple file-based storage of previously replied posts
+        # 3. Scrape the post page to see if our account has replied
+        
+        return False
+
+    def _strip_timezone(self, dt):
+        return strip_timezone(dt)
+        
+    def _safe_datetime_diff(self, dt1, dt2):
+        return safe_datetime_diff(dt1, dt2)
+
+    @ensure_naive_datetimes
+    def prioritize_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Sort posts by engagement level, relevance, recency
+        
+        Args:
+            posts: List of post data dictionaries
+            
+        Returns:
+            Sorted list of posts by priority score
+        """
+        if not posts:
+            return []
+            
+        logger.logger.info(f"Prioritizing {len(posts)} posts by engagement, relevance, and recency")
+        
+        # Calculate a priority score for each post
+        scored_posts = []
+        now = self._strip_timezone(datetime.now())
+        
+        for post in posts:
+            try:
+                # Base score starts at 0
+                score = 0
+                
+                # Factor 1: Engagement score (0-50 points)
+                engagement = min(100, post.get('engagement_score', 0))
+                score += engagement * 0.5  # Up to 50 points
+                
+                # Factor 2: Recency (0-30 points)
+                timestamp = post.get('timestamp')
+                if timestamp:
+                    # Convert to naive datetime for comparison
+                    timestamp = self._strip_timezone(timestamp)
+                    # Calculate hours since posted
+                    hours_ago = self._safe_datetime_diff(now, timestamp) / 3600
+                    
+                    # More recent posts get higher scores (inverse relationship)
+                    recency_score = max(0, 30 - (hours_ago * 2.5))  # Lose 2.5 points per hour, max 30
+                    score += recency_score
+                
+                # Factor 3: Market relevance (0-30 points)
+                # Use the market_relevance_score if available
+                relevance = min(30, post.get('market_relevance_score', 0) * 2)
+                score += relevance
+                
+                # Factor 4: Has question (bonus 10 points)
+                # Questions are good opportunities for helpful replies
+                if post.get('content_analysis', {}).get('has_question', False):
+                    score += 10
+                    
+                # Factor 5: Media content (bonus 5 points)
+                # Posts with media often get more engagement
+                if post.get('has_media', {}).get('has_any_media', False):
+                    score += 5
+                    
+                # Store score with post
+                post['priority_score'] = score
+                scored_posts.append(post)
+            
+            except Exception as e:
+                # If there's an error scoring this post, still include it with a default score
+                logger.logger.warning(f"Error scoring post: {e}")
+                post['priority_score'] = 0
+                scored_posts.append(post)
+        
+        # Sort by priority score (highest first)
+        sorted_posts = sorted(scored_posts, key=lambda x: x.get('priority_score', 0), reverse=True)
+        
+        # Log top priority posts
+        if sorted_posts:
+            top_posts = sorted_posts[:3]
+            logger.logger.info("Top priority posts:")
+            for i, post in enumerate(top_posts):
+                preview = post.get('text', '')[:50]
+                if len(post.get('text', '')) > 50:
+                    preview += "..."
+                logger.logger.info(f"  {i+1}. Score: {post.get('priority_score', 0):.1f} - {preview}")
+        
+        return sorted_posts
 
     def _detect_questions(self, text: str) -> Dict[str, Any]:
         """Enhanced question detection with type classification"""
@@ -441,8 +781,33 @@ class ContentAnalyzer:
                 
         return list(set(found_memes))  # Remove duplicates
 
+    def _detect_conversation_hooks(self, text: str) -> List[str]:
+        """Detect conversation hooks and engagement cues"""
+        text_lower = text.lower()
+        words = text_lower.split()
+        found_hooks = []
+        
+        # Check for individual hook words
+        for hook in self.conversation_hooks:
+            if hook in words:
+                found_hooks.append(hook)
+                
+        # Check for specific patterns
+        conversation_patterns = [
+            r'what (do|about|if) you',
+            r'anyone (else|here)',
+            r'do you (think|feel)',
+            r'(agree|disagree)'
+        ]
+        
+        for pattern in conversation_patterns:
+            if re.search(pattern, text_lower):
+                found_hooks.append(pattern)
+                
+        return found_hooks
+
     def _analyze_conversation_state(self, post: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze conversation context and state"""
+        """Analyze conversation context and state with safe datetime handling"""
         post_id = post.get('post_id', '')
         author_id = post.get('author_id', '')
         
@@ -455,6 +820,8 @@ class ContentAnalyzer:
         }
         
         try:
+            current_time = self._strip_timezone(datetime.now())
+            
             # Check if post is part of ongoing thread
             if post.get('parent_id'):
                 state['is_thread'] = True
@@ -462,29 +829,41 @@ class ContentAnalyzer:
                 thread_history = self._get_thread_history(post)
                 
                 if thread_history:
-                    # Calculate thread age
-                    oldest_post = min(p['timestamp'] for p in thread_history)
-                    state['conversation_age'] = (datetime.now() - oldest_post).total_seconds()
+                    # Process timestamps, ensuring they're all naive datetimes
+                    thread_timestamps = []
+                    for p in thread_history:
+                        ts = p.get('timestamp')
+                        if ts:
+                            thread_timestamps.append(self._strip_timezone(ts))
                     
-                    # Count our previous interactions
-                    state['previous_interactions'] = sum(
-                        1 for p in thread_history 
-                        if p.get('is_our_reply', False)
-                    )
-                    
-                    # Check if quick reply needed (recent active discussion)
-                    if state['conversation_age'] < 1800:  # 30 minutes
-                        state['needs_quick_reply'] = True
-                        state['activity_multiplier'] = 1.2
+                    if thread_timestamps:
+                        # Calculate thread age
+                        oldest_post = min(thread_timestamps)
+                        state['conversation_age'] = (current_time - oldest_post).total_seconds()
+                        
+                        # Count our previous interactions
+                        state['previous_interactions'] = sum(
+                            1 for p in thread_history 
+                            if p.get('is_our_reply', False)
+                        )
+                        
+                        # Check if quick reply needed (recent active discussion)
+                        if state['conversation_age'] < 1800:  # 30 minutes
+                            state['needs_quick_reply'] = True
+                            state['activity_multiplier'] = 1.2
             
             # Check author interaction history
             author_history = self._get_author_history(author_id)
             if author_history:
-                # Adjust activity multiplier based on previous interactions
-                recent_interactions = sum(
-                    1 for p in author_history
-                    if (datetime.now() - p['timestamp']).total_seconds() < 86400  # 24 hours
-                )
+                # Calculate recent interactions with safe datetime handling
+                recent_interactions = 0
+                for p in author_history:
+                    ts = self._strip_timezone(p.get('timestamp'))
+                    if ts:
+                        time_diff = (current_time - ts).total_seconds()
+                        if time_diff < 86400:  # 24 hours
+                            recent_interactions += 1
+                
                 state['activity_multiplier'] *= (1 + (recent_interactions * 0.1))
             
             # Update conversation tracking
@@ -497,19 +876,29 @@ class ContentAnalyzer:
             return state
 
     def _get_thread_history(self, post: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Get conversation thread history"""
+        """Get conversation thread history with safe datetime handling"""
         try:
             thread_id = post.get('thread_id') or post.get('parent_id')
             if not thread_id or not self.db:
                 return []
                 
             # Query thread history from database
-            history = self.db.get_thread_history(thread_id)
+            history = self.db.get_thread_history(thread_id) or []
             
-            # Sort by timestamp
+            # Sort by timestamp after ensuring timezone consistency
             if history:
-                history.sort(key=lambda x: x.get('timestamp', datetime.min))
+                # First sanitize timestamps
+                for item in history:
+                    if 'timestamp' in item:
+                        item['timestamp'] = self._strip_timezone(item['timestamp'])
                 
+                try:
+                    # Sort with handling for missing timestamps
+                    history.sort(key=lambda x: x.get('timestamp') or datetime.min)
+                except Exception as sort_err:
+                    logger.logger.warning(f"Error sorting thread history: {sort_err}")
+                    # If sorting fails, return unsorted but don't fail completely
+                    
             return history
             
         except Exception as e:
@@ -517,13 +906,18 @@ class ContentAnalyzer:
             return []
 
     def _get_author_history(self, author_id: str) -> List[Dict[str, Any]]:
-        """Get author interaction history"""
+        """Get author interaction history with safe datetime handling"""
         try:
             if not author_id or not self.db:
                 return []
                 
             # Get recent author posts and our replies
-            history = self.db.get_author_interaction_history(author_id, hours=24)
+            history = self.db.get_author_interaction_history(author_id, hours=24) or []
+            
+            # Sanitize timestamps
+            for item in history:
+                if 'timestamp' in item:
+                    item['timestamp'] = self._strip_timezone(item['timestamp'])
             
             return history
             
@@ -532,16 +926,19 @@ class ContentAnalyzer:
             return []
 
     def _update_conversation_tracking(self, post: Dict[str, Any]) -> None:
-        """Update active conversation tracking"""
+        """Update active conversation tracking with safe datetime handling"""
         try:
-            now = datetime.now()
+            now = self._strip_timezone(datetime.now())
             post_id = post.get('post_id', '')
             thread_id = post.get('thread_id') or post.get('parent_id')
             
             # Clean expired conversations
             expired = []
             for conv_id, data in self.active_discussions.items():
-                if (now - data['last_update']).total_seconds() > self.discussion_expiry:
+                # Ensure last_update is timezone-naive
+                last_update = self._strip_timezone(data['last_update'])
+                    
+                if (now - last_update).total_seconds() > self.discussion_expiry:
                     expired.append(conv_id)
             
             for conv_id in expired:
@@ -567,13 +964,56 @@ class ContentAnalyzer:
         except Exception as e:
             logger.log_error("Conversation Tracking Update", str(e))
 
+    def _update_trending(self, features: Dict[str, Any]) -> None:
+        """Update trending topics and engagement tracking with safe datetime handling"""
+        try:
+            now = self._strip_timezone(datetime.now())
+            
+            # Ensure trending_reset_time is timezone-naive
+            reset_time = self._strip_timezone(self.trending_reset_time)
+            
+            # Reset trending data if expired
+            if (now - reset_time).total_seconds() > (self.trending_reset_hours * 3600):
+                self.trending = {
+                    'topics': Counter(),
+                    'tokens': Counter(),
+                    'phrases': Counter(),
+                    'sentiment': Counter()
+                }
+                self.trending_reset_time = now
+            
+            # Update topic tracking
+            for term in features.get('crypto_terms', []):
+                self.trending['topics'][term] += 1
+                
+            # Update token tracking
+            for token in features.get('crypto_terms', {}).get('symbols', []):
+                self.trending['tokens'][token] += 1
+                
+            # Update phrase tracking
+            for phrase in features.get('meme_phrases', []):
+                self.trending['phrases'][phrase] += 1
+                
+            # Update sentiment tracking
+            sentiment = features.get('sentiment', 'neutral')
+            self.trending['sentiment'][sentiment] += 1
+            
+            # Trim to keep only most frequent items
+            for category in self.trending:
+                self.trending[category] = Counter(
+                    dict(self.trending[category].most_common(50))
+                )
+                
+        except Exception as e:
+            logger.log_error("Trending Update", str(e))
+
     def _calculate_context_score(self, post: Dict[str, Any], features: Dict[str, Any]) -> float:
-        """Calculate contextual relevance score"""
+        """Calculate contextual relevance score with safe datetime handling"""
         try:
             score = 1.0  # Base score
             
             # Time of day adjustment
-            hour = datetime.now().hour
+            hour = self._strip_timezone(datetime.now()).hour
             if 8 <= hour <= 23:  # Active hours
                 score *= 1.1
             elif 0 <= hour <= 7:  # Less active hours
@@ -675,46 +1115,6 @@ class ContentAnalyzer:
             logger.log_error("Response Focus Determination", str(e))
             return {'primary_type': 'neutral', 'style': 'neutral', 'length': 'medium'}
 
-    def _update_trending(self, features: Dict[str, Any]) -> None:
-        """Update trending topics and engagement tracking"""
-        try:
-            now = datetime.now()
-            
-            # Reset trending data if expired
-            if (now - self.trending_reset_time).total_seconds() > (self.trending_reset_hours * 3600):
-                self.trending = {
-                    'topics': Counter(),
-                    'tokens': Counter(),
-                    'phrases': Counter(),
-                    'sentiment': Counter()
-                }
-                self.trending_reset_time = now
-            
-            # Update topic tracking
-            for term in features.get('crypto_terms', []):
-                self.trending['topics'][term] += 1
-                
-            # Update token tracking
-            for token in features.get('crypto_terms', {}).get('symbols', []):
-                self.trending['tokens'][token] += 1
-                
-            # Update phrase tracking
-            for phrase in features.get('meme_phrases', []):
-                self.trending['phrases'][phrase] += 1
-                
-            # Update sentiment tracking
-            sentiment = features.get('sentiment', 'neutral')
-            self.trending['sentiment'][sentiment] += 1
-            
-            # Trim to keep only most frequent items
-            for category in self.trending:
-                self.trending[category] = Counter(
-                    dict(self.trending[category].most_common(50))
-                )
-                
-        except Exception as e:
-            logger.log_error("Trending Update", str(e))
-
     def _extract_question_topics(self, features: Dict[str, Any]) -> List[str]:
         """Extract main topics from questions"""
         topics = []
@@ -811,35 +1211,6 @@ class ContentAnalyzer:
         except Exception as e:
             logger.log_error("Opinion Points Extraction", str(e))
             return points
-
-    def get_trending_stats(self) -> Dict[str, Any]:
-        """Get current trending statistics"""
-        try:
-            stats = {
-                'topics': dict(self.trending['topics'].most_common(10)),
-                'tokens': dict(self.trending['tokens'].most_common(5)),
-                'phrases': dict(self.trending['phrases'].most_common(5)),
-                'sentiment': dict(self.trending['sentiment'].most_common(3)),
-                'last_reset': self.trending_reset_time,
-                'hours_tracked': self.trending_reset_hours
-            }
-            
-            # Calculate sentiment ratio
-            total_sentiment = sum(self.trending['sentiment'].values())
-            if total_sentiment > 0:
-                stats['sentiment_ratio'] = {
-                    sentiment: count / total_sentiment
-                    for sentiment, count in self.trending['sentiment'].items()
-                }
-            
-            # Get related topics
-            stats['related_topics'] = self._find_related_topics()
-            
-            return stats
-            
-        except Exception as e:
-            logger.log_error("Trending Stats Retrieval", str(e))
-            return {}
 
     def _analyze_tone(self, text: str) -> str:
         """Analyze the conversational tone of text"""
@@ -981,30 +1352,40 @@ class ContentAnalyzer:
             return {'label': 'neutral', 'score': 0.0, 'confidence': 0.0}
 
     def _store_analysis(self, post_id: str, analysis: Dict[str, Any]) -> None:
-        """Store analysis results in database"""
+        """Store analysis results in database with safe datetime handling"""
         try:
             if not self.db or not post_id:
                 return
                 
             # Prepare data for storage
+            analysis_copy = analysis.copy()
+            
+            # Convert analyzed_at to string to ensure it's serializable
+            if 'analyzed_at' in analysis_copy:
+                analysis_copy['analyzed_at'] = str(analysis_copy['analyzed_at'])
+            
+            # Prepare data for storage
             storage_data = {
                 'post_id': post_id,
-                'reply_worthy': analysis['reply_worthy'],
-                'reply_score': analysis['reply_score'],
-                'features': json.dumps(analysis['features']),
-                'engagement_scores': json.dumps(analysis['engagement_scores']),
-                'response_focus': json.dumps(analysis['response_focus']),
-                'timestamp': datetime.now()
+                'reply_worthy': analysis_copy['reply_worthy'],
+                'reply_score': analysis_copy['reply_score'],
+                'features': json.dumps(analysis_copy['features']),
+                'engagement_scores': json.dumps(analysis_copy['engagement_scores']),
+                'response_focus': json.dumps(analysis_copy['response_focus']),
+                'timestamp': self._strip_timezone(datetime.now())
             }
             
-            # Store in database
-            self.db.store_content_analysis(**storage_data)
+            # Check if store_content_analysis method exists
+            if hasattr(self.db, 'store_content_analysis'):
+                self.db.store_content_analysis(**storage_data)
+            else:
+                logger.logger.warning("Database doesn't have store_content_analysis method, analysis not stored")
             
         except Exception as e:
             logger.log_error("Analysis Storage", str(e))
 
     def _find_related_topics(self) -> Dict[str, List[str]]:
-        """Find related topics based on co-occurrence"""
+        """Find related topics based on co-occurrence with safe error handling"""
         try:
             related = {}
             
@@ -1015,15 +1396,18 @@ class ContentAnalyzer:
                 # Find topics that frequently appear together
                 co_occurrences = Counter()
                 
-                # Query database for co-occurring topics
-                if self.db:
-                    recent_posts = self.db.get_recent_posts_with_topic(topic, hours=24)
-                    
-                    for post in recent_posts:
-                        post_topics = set(post.get('topics', []))
-                        post_topics.discard(topic)  # Remove the current topic
-                        for other_topic in post_topics:
-                            co_occurrences[other_topic] += 1
+                # Query database for co-occurring topics if available
+                if self.db and hasattr(self.db, 'get_recent_posts_with_topic'):
+                    try:
+                        recent_posts = self.db.get_recent_posts_with_topic(topic, hours=24)
+                        
+                        for post in recent_posts:
+                            post_topics = set(post.get('topics', []))
+                            post_topics.discard(topic)  # Remove the current topic
+                            for other_topic in post_topics:
+                                co_occurrences[other_topic] += 1
+                    except Exception as db_err:
+                        logger.logger.warning(f"Error retrieving posts for topic {topic}: {db_err}")
                 
                 # Get top 3 related topics
                 related[topic] = [
@@ -1034,4 +1418,414 @@ class ContentAnalyzer:
             
         except Exception as e:
             logger.log_error("Related Topics Analysis", str(e))
-            return {}                      
+            return {}
+            
+    def get_trending_stats(self) -> Dict[str, Any]:
+        """Get current trending statistics"""
+        try:
+            stats = {
+                'topics': dict(self.trending['topics'].most_common(10)),
+                'tokens': dict(self.trending['tokens'].most_common(5)),
+                'phrases': dict(self.trending['phrases'].most_common(5)),
+                'sentiment': dict(self.trending['sentiment'].most_common(3)),
+                'last_reset': self.trending_reset_time,
+                'hours_tracked': self.trending_reset_hours
+            }
+            
+            # Calculate sentiment ratio
+            total_sentiment = sum(self.trending['sentiment'].values())
+            if total_sentiment > 0:
+                stats['sentiment_ratio'] = {
+                    sentiment: count / total_sentiment
+                    for sentiment, count in self.trending['sentiment'].items()
+                }
+            
+            # Get related topics
+            stats['related_topics'] = self._find_related_topics()
+            
+            return stats
+            
+        except Exception as e:
+            logger.log_error("Trending Stats Retrieval", str(e))
+            return {}
+
+    def generate_response_with_llm(self, post: Dict[str, Any], market_data: Dict[str, Any] = None, llm_provider=None) -> str:
+        """
+        Generate a response to a post using the connected LLM provider
+        
+        Args:
+            post: Post data dictionary
+            market_data: Current market data (optional)
+            llm_provider: LLM provider instance (optional)
+        
+        Returns:
+            Generated response text
+        """
+        try:
+            # Use provided LLM provider or instance variable
+            provider = llm_provider or self.llm_provider
+            
+            if not provider:
+                logger.logger.error("No LLM provider available for response generation")
+                return "No LLM provider available to generate response"
+                
+            # Analyze the post
+            analysis = self.analyze_post(post)
+            
+            # Extract relevant features for response generation
+            post_text = post.get('text', '')
+            author_name = post.get('author_name', 'User')
+            
+            # Format market data if available
+            market_context = ""
+            if market_data:
+                # Extract relevant token data based on post content
+                relevant_tokens = self._extract_relevant_tokens(post_text, market_data)
+                
+                # Format token data
+                for token, data in relevant_tokens.items():
+                    market_context += f"\n{token}: ${data.get('current_price', 0):.4f}, "
+                    market_context += f"{data.get('price_change_percentage_24h', 0):.2f}% (24h)"
+            
+            # Build response focus
+            response_focus = analysis.get('response_focus', {})
+            primary_type = response_focus.get('primary_type', 'inform')
+            response_style = response_focus.get('style', 'neutral')
+            response_length = response_focus.get('length', 'medium')
+            
+            # Generate prompt for the LLM
+            prompt = f"""Generate a reply to the following social media post about cryptocurrency. 
+Post from {author_name}: "{post_text}"
+
+Response Focus: {primary_type}
+Style: {response_style}
+Length: {response_length}
+
+{market_context}
+
+Key points to address:
+{', '.join(response_focus.get('key_points', []))}
+
+Your response should be conversational, helpful and tailored to the post. Do not include quotation marks or formatting markers in your reply."""
+
+            # Generate response using the LLM provider
+            response = provider.generate_text(prompt=prompt, max_tokens=300, temperature=0.7)
+            
+            return response or "Sorry, I couldn't generate a response at this time."
+            
+        except Exception as e:
+            logger.log_error("Response Generation", str(e))
+            return "Failed to generate response due to an error"
+    
+    def _extract_relevant_tokens(self, text: str, market_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract tokens mentioned in text and get their market data"""
+        relevant_tokens = {}
+        
+        # Extract potential token symbols from text
+        # Look for standard token formats (BTC, ETH, etc.)
+        symbols = re.findall(r'\$?[A-Z]{2,5}\b', text)
+        
+        # Also look for token names
+        token_names = ['bitcoin', 'ethereum', 'ripple', 'solana', 'avalanche', 'chainlink']
+        found_names = [name for name in token_names if name.lower() in text.lower()]
+        
+        # Map common names to symbols
+        name_to_symbol = {
+            'bitcoin': 'BTC',
+            'ethereum': 'ETH',
+            'ripple': 'XRP',
+            'solana': 'SOL',
+            'avalanche': 'AVAX',
+            'chainlink': 'LINK'
+        }
+        
+        # Add symbols from token names
+        for name in found_names:
+            if name.lower() in name_to_symbol:
+                symbols.append(name_to_symbol[name.lower()])
+        
+        # Get market data for found symbols
+        for symbol in set(symbols):  # Remove duplicates
+            # Remove $ prefix if present
+            if symbol.startswith('$'):
+                symbol = symbol[1:]
+                
+            # Check if symbol exists in market data
+            if symbol in market_data:
+                relevant_tokens[symbol] = market_data[symbol]
+            
+        # If no specific tokens found, include BTC as reference
+        if not relevant_tokens and 'BTC' in market_data:
+            relevant_tokens['BTC'] = market_data['BTC']
+            
+        return relevant_tokens
+        
+    def find_market_related_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter posts to only include those related to markets with enhanced detection
+        
+        Args:
+            posts: List of post data dictionaries
+            
+        Returns:
+            Filtered list of market-related posts
+        """
+        if not posts:
+            logger.logger.warning("No posts provided to filter for market relevance")
+            return []
+            
+        logger.logger.info(f"Filtering {len(posts)} posts for market relevance")
+        
+        # Flatten the keywords for efficient matching
+        all_keywords = []
+        for category in self.market_keywords.values():
+            all_keywords.extend(category)
+        
+        # Store matched posts with their relevance score
+        market_related = []
+        
+        for post in posts:
+            post_text = post.get('text', '').lower() if post.get('text') else ''
+            
+            # Skip posts with no text
+            if not post_text:
+                continue
+                
+            # Track matched keywords for logging
+            matched_keywords = []
+            keyword_categories = set()
+            
+            # Basic keyword matching with categorization
+            for category, keywords in self.market_keywords.items():
+                for keyword in keywords:
+                    if keyword in post_text:
+                        matched_keywords.append(keyword)
+                        keyword_categories.add(category)
+            
+            # Price pattern matching (e.g., "$45.2K" or "45,000 USDT")
+            price_patterns = [
+                r'\$\d+[,.]?\d*[KMB]?',  # $45K, $45.2K
+                r'\d+[,.]?\d*\s*[$€£¥]',  # 45.2 $, 45,000 €
+                r'\d+[,.]?\d*\s*usdt',    # 45000 USDT
+                r'\d+[,.]?\d*\s*usd',     # 45000 USD
+                r'\d+[,.]\d*\s*eth',      # 0.05 ETH
+                r'\d+[,.]\d*\s*btc'       # 0.01 BTC
+            ]
+            
+            for pattern in price_patterns:
+                if re.search(pattern, post_text, re.IGNORECASE):
+                    matched_keywords.append("price_pattern")
+                    keyword_categories.add('finance')
+                    break
+            
+            # Percentage change patterns
+            percentage_patterns = [
+                r'[+-]?\d+(\.\d+)?%',         # +5%, -10.5%
+                r'up\s+\d+(\.\d+)?%',         # up 5%
+                r'down\s+\d+(\.\d+)?%',       # down 10.5%
+                r'gained\s+\d+(\.\d+)?%',     # gained 5%
+                r'lost\s+\d+(\.\d+)?%',       # lost 10.5%
+                r'increased\s+\d+(\.\d+)?%',  # increased 5%
+                r'decreased\s+\d+(\.\d+)?%',  # decreased 10.5%
+            ]
+            
+            for pattern in percentage_patterns:
+                if re.search(pattern, post_text, re.IGNORECASE):
+                    matched_keywords.append("percentage_change")
+                    keyword_categories.add('finance')
+                    break
+                    
+            # Also check hashtags if available
+            if 'content_analysis' in post and 'hashtags' in post['content_analysis']:
+                hashtags = post['content_analysis']['hashtags']
+                for tag in hashtags:
+                    tag = tag.lower()
+                    if any(keyword in tag for keyword in all_keywords):
+                        matched_keywords.append(f"hashtag:{tag}")
+                        # Determine category of the hashtag
+                        for cat, keywords in self.market_keywords.items():
+                            if any(keyword in tag for keyword in keywords):
+                                keyword_categories.add(cat)
+            
+            # Calculate relevance score based on matches
+            relevance_score = 0
+            
+            # Base score from number of matches
+            relevance_score += min(10, len(matched_keywords))
+            
+            # Bonus for matching multiple categories
+            relevance_score += len(keyword_categories) * 3
+            
+            # Bonus for having both crypto and finance terms (high relevance)
+            if 'crypto' in keyword_categories and 'finance' in keyword_categories:
+                relevance_score += 5
+            
+            # Mark as market related if we found any matches and score is high enough
+            if matched_keywords and relevance_score >= 3:
+                # Add relevant fields to the post
+                post['market_related'] = True
+                post['market_keywords'] = matched_keywords
+                post['market_categories'] = list(keyword_categories)
+                post['market_relevance_score'] = relevance_score
+                market_related.append(post)
+                
+        logger.logger.info(f"Found {len(market_related)} market-related posts out of {len(posts)}")
+        
+        # Log some example keywords for debugging
+        if market_related:
+            examples = [p.get('market_keywords', [])[:3] for p in market_related[:3]]
+            logger.logger.debug(f"Example keywords matched: {examples}")
+        
+        # Sort by relevance score (highest first)
+        market_related.sort(key=lambda x: x.get('market_relevance_score', 0), reverse=True)
+        
+        return market_related
+
+    def filter_already_replied_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter out posts we've already replied to. Handles missing database methods gracefully.
+        
+        Args:
+            posts: List of post data dictionaries
+            
+        Returns:
+            Filtered list of posts
+        """
+        if not posts:
+            logger.logger.warning("No posts provided to filter for replies")
+            return []
+            
+        logger.logger.info(f"Filtering {len(posts)} posts for ones we haven't replied to yet")
+        
+        filtered_posts = []
+        
+        for post in posts:
+            post_id = post.get('post_id')
+            post_url = post.get('post_url')
+            
+            # Skip posts with no ID or URL
+            if not post_id and not post_url:
+                continue
+            
+            # Check if we've already replied to this post
+            already_replied = False
+            
+            try:
+                # Try using the database method if it exists
+                if self.db and hasattr(self.db, 'check_if_post_replied'):
+                    already_replied = self.db.check_if_post_replied(post_id, post_url)
+                else:
+                    # Fallback method if database function doesn't exist
+                    already_replied = self._check_if_post_replied_fallback(post_id, post_url)
+            except Exception as e:
+                logger.logger.warning(f"Error checking if post was replied to: {str(e)}")
+                # Fall back to checking locally
+                already_replied = False
+            
+            if not already_replied:
+                filtered_posts.append(post)
+        
+        logger.logger.info(f"Filtered out {len(posts) - len(filtered_posts)} already replied posts")
+        return filtered_posts
+    
+    def _check_if_post_replied_fallback(self, post_id: str, post_url: str) -> bool:
+        """
+        Fallback method to check if a post has been replied to when database method is unavailable
+        
+        Args:
+            post_id: The ID of the post
+            post_url: The URL of the post
+            
+        Returns:
+            True if we've replied to this post, False otherwise
+        """
+        # Without proper database support, we assume not replied
+        # This is a placeholder for a proper implementation
+        
+        # In a real implementation, we could check:
+        # 1. Local memory cache of replied posts
+        # 2. Simple file-based storage of previously replied posts
+        # 3. Scrape the post page to see if our account has replied
+        
+        return False
+    
+    @ensure_naive_datetimes
+    def prioritize_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Sort posts by engagement level, relevance, recency
+        
+        Args:
+            posts: List of post data dictionaries
+            
+        Returns:
+            Sorted list of posts by priority score
+        """
+        if not posts:
+            return []
+            
+        logger.logger.info(f"Prioritizing {len(posts)} posts by engagement, relevance, and recency")
+        
+        # Calculate a priority score for each post
+        scored_posts = []
+        now = self._strip_timezone(datetime.now())
+        
+        for post in posts:
+            try:
+                # Base score starts at 0
+                score = 0
+                
+                # Factor 1: Engagement score (0-50 points)
+                engagement = min(100, post.get('engagement_score', 0))
+                score += engagement * 0.5  # Up to 50 points
+                
+                # Factor 2: Recency (0-30 points)
+                timestamp = post.get('timestamp')
+                if timestamp:
+                    # Convert to naive datetime for comparison
+                    timestamp = self._strip_timezone(timestamp)
+                    # Calculate hours since posted
+                    hours_ago = self._safe_datetime_diff(now, timestamp) / 3600
+                    
+                    # More recent posts get higher scores (inverse relationship)
+                    recency_score = max(0, 30 - (hours_ago * 2.5))  # Lose 2.5 points per hour, max 30
+                    score += recency_score
+                
+                # Factor 3: Market relevance (0-30 points)
+                # Use the market_relevance_score if available
+                relevance = min(30, post.get('market_relevance_score', 0) * 2)
+                score += relevance
+                
+                # Factor 4: Has question (bonus 10 points)
+                # Questions are good opportunities for helpful replies
+                if post.get('content_analysis', {}).get('has_question', False):
+                    score += 10
+                    
+                # Factor 5: Media content (bonus 5 points)
+                # Posts with media often get more engagement
+                if post.get('has_media', {}).get('has_any_media', False):
+                    score += 5
+                    
+                # Store score with post
+                post['priority_score'] = score
+                scored_posts.append(post)
+            
+            except Exception as e:
+                # If there's an error scoring this post, still include it with a default score
+                logger.logger.warning(f"Error scoring post: {e}")
+                post['priority_score'] = 0
+                scored_posts.append(post)
+        
+        # Sort by priority score (highest first)
+        sorted_posts = sorted(scored_posts, key=lambda x: x.get('priority_score', 0), reverse=True)
+        
+        # Log top priority posts
+        if sorted_posts:
+            top_posts = sorted_posts[:3]
+            logger.logger.info("Top priority posts:")
+            for i, post in enumerate(top_posts):
+                preview = post.get('text', '')[:50]
+                if len(post.get('text', '')) > 50:
+                    preview += "..."
+                logger.logger.info(f"  {i+1}. Score: {post.get('priority_score', 0):.1f} - {preview}")
+        
+        return sorted_posts
