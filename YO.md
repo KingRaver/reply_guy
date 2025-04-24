@@ -13,6 +13,7 @@
 
 Tokenetics Market Oracle is an enterprise-grade cryptocurrency analysis system that combines real-time market data, machine learning, and natural language processing to generate high-precision market insights across multiple timeframes. The system operates on a modular architecture:
 
+For a detailed overview of the system architecture, see the [architecture.txt](architecture.txt) file in the repository.
 
 ### Core Components Interaction
 
