@@ -1,10 +1,35 @@
 # 🚀 Tokenetics Market Oracle
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Modular LLM](https://img.shields.io/badge/LLM-Modular%20Architecture-9cf)](https://www.anthropic.com/)
-[![CoinGecko API](https://img.shields.io/badge/API-CoinGecko-brightgreen)](https://www.coingecko.com/en/api)
+> *Advanced cryptocurrency analytics engine leveraging AI, technical indicators, and social media engagement for precision market insights*
 
-An advanced cryptocurrency analysis system that leverages AI and market data to provide intelligent market insights, predictions, and social media engagement. Tokenetics Market Oracle combines real-time market data with a modular LLM architecture to generate high-quality analysis across multiple timeframes.
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![TensorFlow](https://img.shields.io/badge/TensorFlow-2.16.2-orange)](https://www.tensorflow.org/)
+[![Anthropic Claude](https://img.shields.io/badge/LLM-Anthropic%20Claude-9cf)](https://www.anthropic.com/)
+[![CoinGecko API](https://img.shields.io/badge/API-CoinGecko-brightgreen)](https://www.coingecko.com/en/api)
+[![SQLAlchemy](https://img.shields.io/badge/ORM-SQLAlchemy-red)](https://www.sqlalchemy.org/)
+[![scikit-learn](https://img.shields.io/badge/ML-scikit--learn-blueviolet)](https://scikit-learn.org/)
+
+## 📊 System Overview
+
+Tokenetics Market Oracle is an enterprise-grade cryptocurrency analysis system that combines real-time market data, machine learning, and natural language processing to generate high-precision market insights across multiple timeframes. The system operates on a modular architecture:
+
+![Architecture Overview](https://raw.githubusercontent.com/username/repository/main/docs/architecture_diagram.png)
+
+*Note: Create and add a simple architecture diagram to your repository*
+
+For a detailed overview of the system architecture, see the [architecture.txt](architecture.txt) file in the repository.
+
+### Core Components Interaction
+
+```
+Market Data ──► Technical Analysis ──► Statistical Models ──► ML Predictions
+     │                  │                      │                    │
+     │                  │                      │                    │
+     └──────────────────┴──────────────────────┴────────────► Unified Prediction ──► Social Media Engagement
+                                                                     │
+                                                                     ▼
+                                                          Continuous Feedback & Improvement
+```
 
 ## ✨ Features
 
@@ -50,6 +75,16 @@ An advanced cryptocurrency analysis system that leverages AI and market data to 
 - Smart evaluation of expired predictions
 - Weekly performance summaries
 
+## 📊 Example Predictions
+
+| Timeframe | Token | Prediction | Confidence | Actual Outcome | Accuracy |
+|-----------|-------|------------|------------|----------------|----------|
+| 1 hour    | BTC   | $65,432    | 73%        | $65,380        | 99.92%   |
+| 24 hour   | ETH   | $3,219     | 68%        | $3,126         | 97.11%   |
+| 7 day     | SOL   | $147.32    | 62%        | $151.85        | 96.98%   |
+
+*Sample prediction data - actual results will vary*
+
 ## 🧩 Natural Language Processing Capabilities
 
 The Tokenetics Market Oracle includes advanced NLP for engagement and sentiment analysis:
@@ -67,6 +102,10 @@ The Tokenetics Market Oracle includes advanced NLP for engagement and sentiment 
 ## 🛠️ Technical Architecture
 
 ### Core Components
+
+![Component Diagram](https://raw.githubusercontent.com/username/repository/main/docs/component_diagram.png)
+
+*Note: Create and add a component diagram to your repository*
 
 - **Market Data Handler**: Fetches and processes cryptocurrency market data
 - **Technical Indicators Engine**: Calculates 15+ technical indicators across timeframes
@@ -167,6 +206,7 @@ The system features a flexible, provider-agnostic language model integration:
    ```bash
    pip install -r requirements.txt
    ```
+   *This will install all the necessary dependencies listed in the [requirements.txt](requirements.txt) file*
 
 3. Configure your credentials in `.env`
    ```
