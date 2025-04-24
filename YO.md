@@ -13,8 +13,6 @@
 
 Tokenetics Market Oracle is an enterprise-grade cryptocurrency analysis system that combines real-time market data, machine learning, and natural language processing to generate high-precision market insights across multiple timeframes. The system operates on a modular architecture:
 
-![Architecture Overview]([https://raw.githubusercontent.com/username/repository/main/docs/architecture_diagram.png](https://github.com/KingRaver/reply_guy/blob/main/architecture.txt))
-
 
 ### Core Components Interaction
 
@@ -99,10 +97,6 @@ The Tokenetics Market Oracle includes advanced NLP for engagement and sentiment 
 ## 🛠️ Technical Architecture
 
 ### Core Components
-
-![Component Diagram](https://raw.githubusercontent.com/username/repository/main/docs/component_diagram.png)
-
-*Note: Create and add a component diagram to your repository*
 
 - **Market Data Handler**: Fetches and processes cryptocurrency market data
 - **Technical Indicators Engine**: Calculates 15+ technical indicators across timeframes
