@@ -204,6 +204,7 @@ The system features a flexible, provider-agnostic language model integration:
    ```bash
    pip install -r requirements.txt
    ```
+   *This will install all the necessary dependencies listed in the [requirements.txt](requirements.txt) file*
 
 3. Configure your credentials in `.env`
    ```
