@@ -28,10 +28,6 @@ Tokenetics Market Oracle is an integrated system that:
 4. **Engages with social media** by posting analyses and replying to relevant discussions
 5. **Tracks prediction accuracy** for continuous improvement
 
-![System Workflow](https://raw.githubusercontent.com/username/repository/main/docs/system_workflow.png)
-
-*Note: The diagram above is a placeholder. Create and add your own workflow diagram.*
-
 ## Getting Started
 
 ### First Run
