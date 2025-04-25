@@ -22,6 +22,8 @@ import threading
 import queue
 import json
 from llm_provider import LLMProvider
+from warpcast_handler import WarpcastHandler
+from warpcast_integration import WarpcastIntegration
 
 from utils.logger import logger
 from utils.browser import browser
@@ -38,139 +40,172 @@ from content_analyzer import ContentAnalyzer
 
 class CryptoAnalysisBot:
     def __init__(self) -> None:
-       self.browser = browser
-       self.config = config
-       self.llm_provider = LLMProvider(self.config)  
-       self.past_predictions = []
-       self.meme_phrases = MEME_PHRASES
-       self.last_check_time = datetime.now()
-       self.last_market_data = {}
-       self.last_reply_time = strip_timezone(datetime.now())
-       
-       # Multi-timeframe prediction tracking
-       self.timeframes = ["1h", "24h", "7d"]
-       self.timeframe_predictions = {tf: {} for tf in self.timeframes}
-       self.timeframe_last_post = {tf: datetime.now() - timedelta(hours=3) for tf in self.timeframes}
-       
-       # Timeframe posting frequency controls (in hours)
-       self.timeframe_posting_frequency = {
-           "1h": 1,    # Every hour
-           "24h": 6,   # Every 6 hours
-           "7d": 24    # Once per day
-       }
-       
-       # Prediction accuracy tracking by timeframe
-       self.prediction_accuracy = {tf: {'correct': 0, 'total': 0} for tf in self.timeframes}
-       
-       # Initialize prediction engine with database and LLM Provider
-       self.prediction_engine = PredictionEngine(
-           database=self.config.db,
-           llm_provider=self.llm_provider  # Pass provider instead of API key
-       )
-       
-       # Create a queue for predictions to process
-       self.prediction_queue = queue.Queue()
-       
-       # Initialize thread for async prediction generation
-       self.prediction_thread = None
-       self.prediction_thread_running = False
-       
-       # Initialize CoinGecko handler with 60s cache duration
-       self.coingecko = CoinGeckoHandler(
-           base_url=self.config.COINGECKO_BASE_URL,
-           cache_duration=60
-       )
+        self.browser = browser
+        self.config = config
+        self.llm_provider = LLMProvider(self.config)  
+        self.past_predictions = []
+        self.meme_phrases = MEME_PHRASES
+        self.last_check_time = datetime.now()
+        self.last_market_data = {}
+        self.last_reply_time = strip_timezone(datetime.now())
 
-       # Target chains to analyze
-       self.target_chains = {
-           'BTC': 'bitcoin',
-           'ETH': 'ethereum',
-           'SOL': 'solana',
-           'XRP': 'ripple',
-           'BNB': 'binancecoin',
-           'AVAX': 'avalanche-2',
-           'DOT': 'polkadot',
-           'UNI': 'uniswap',
-           'NEAR': 'near',
-           'AAVE': 'aave',
-           'FIL': 'filecoin',
-           'POL': 'matic-network',
-           'KAITO': 'kaito'  # Kept in the list but not given special treatment
-       }
+        # Warpcast integration
+        self.WARPCAST_ENABLED = os.getenv('WARPCAST_ENABLED', 'false').lower() == 'true'
+        self.WARPCAST_POST_PREDICTIONS = os.getenv('WARPCAST_POST_PREDICTIONS', 'true').lower() == 'true'
+        self.WARPCAST_POST_ANALYSES = os.getenv('WARPCAST_POST_ANALYSES', 'true').lower() == 'true'
+    
+        # Initialize as None first
+        self.warpcast = None
+    
+        # Then try to initialize if enabled
+        if hasattr(self.config, 'WARPCAST_ENABLED') and self.config.WARPCAST_ENABLED:
+            try:
+                # Import WarpcastIntegration only if needed
+                from warpcast_integration import WarpcastIntegration
+            
+                # Initialize Warpcast integration
+                self.warpcast = WarpcastIntegration(self.config, self.config.db)
+            
+                # Ensure database has Warpcast tables
+                self.config.db.add_warpcast_tables()
+            
+                logger.logger.info("Warpcast integration initialized successfully")
+            except Exception as e:
+                logger.log_error("Warpcast Initialization", str(e))
+                logger.logger.warning(f"Warpcast integration initialization failed: {str(e)}")
+                # Continue without Warpcast functionality
+        else:
+            logger.logger.info("Warpcast integration is disabled")
 
-       # All tokens for reference and comparison
-       self.reference_tokens = list(self.target_chains.keys())
-       
-       # Chain name mapping for display
-       self.chain_name_mapping = self.target_chains.copy()
-       
-       self.CORRELATION_THRESHOLD = 0.75  
-       self.VOLUME_THRESHOLD = 0.60  
-       self.TIME_WINDOW = 24
-       
-       # Smart money thresholds
-       self.SMART_MONEY_VOLUME_THRESHOLD = 1.5  # 50% above average
-       self.SMART_MONEY_ZSCORE_THRESHOLD = 2.0  # 2 standard deviations
-       
-       # Timeframe-specific triggers and thresholds
-       self.timeframe_thresholds = {
-           "1h": {
-               "price_change": 3.0,    # 3% price change for 1h predictions
-               "volume_change": 8.0,   # 8% volume change
-               "confidence": 70,       # Minimum confidence percentage
-               "fomo_factor": 1.0      # FOMO enhancement factor
-           },
-           "24h": {
-               "price_change": 5.0,    # 5% price change for 24h predictions
-               "volume_change": 12.0,  # 12% volume change
-               "confidence": 65,       # Slightly lower confidence for longer timeframe
-               "fomo_factor": 1.2      # Higher FOMO factor
-           },
-           "7d": {
-               "price_change": 8.0,    # 8% price change for 7d predictions
-               "volume_change": 15.0,  # 15% volume change
-               "confidence": 60,       # Even lower confidence for weekly predictions
-               "fomo_factor": 1.5      # Highest FOMO factor
-           }
-       }
-       
-       # Initialize scheduled timeframe posts
-       self.next_scheduled_posts = {
-           "1h": datetime.now() + timedelta(minutes=random.randint(10, 30)),
-           "24h": datetime.now() + timedelta(hours=random.randint(1, 3)),
-           "7d": datetime.now() + timedelta(hours=random.randint(4, 8))
-       }
-       
-       # Initialize reply functionality components
-       self.timeline_scraper = TimelineScraper(self.browser, self.config, self.config.db)
-       self.reply_handler = ReplyHandler(self.browser, self.config, self.llm_provider, self.coingecko, self.config.db)
-       self.content_analyzer = ContentAnalyzer(self.config, self.config.db)
-       
-       # Reply tracking and control
-       self.last_reply_check = datetime.now() - timedelta(minutes=30)  # Start checking soon
-       self.reply_check_interval = 5  # Check for posts to reply to every 60 minutes
-       self.max_replies_per_cycle = 10  # Maximum 10 replies per cycle
-       self.reply_cooldown = 5  # Minutes between reply cycles
-       self.last_reply_time = datetime.now() - timedelta(minutes=self.reply_cooldown)  # Allow immediate first run
-       
-       logger.log_startup()
+        logger.log_startup()     
+    
+        # Multi-timeframe prediction tracking
+        self.timeframes = ["1h", "24h", "7d"]
+        self.timeframe_predictions = {tf: {} for tf in self.timeframes}
+        self.timeframe_last_post = {tf: datetime.now() - timedelta(hours=3) for tf in self.timeframes}
+    
+        # Timeframe posting frequency controls (in hours)
+        self.timeframe_posting_frequency = {
+            "1h": 1,    # Every hour
+            "24h": 6,   # Every 6 hours
+            "7d": 24    # Once per day
+        }
+    
+        # Prediction accuracy tracking by timeframe
+        self.prediction_accuracy = {tf: {'correct': 0, 'total': 0} for tf in self.timeframes}
+    
+        # Initialize prediction engine with database and LLM Provider
+        self.prediction_engine = PredictionEngine(
+            database=self.config.db,
+            llm_provider=self.llm_provider  # Pass provider instead of API key
+        )
+    
+        # Create a queue for predictions to process
+        self.prediction_queue = queue.Queue()
+    
+        # Initialize thread for async prediction generation
+        self.prediction_thread = None
+        self.prediction_thread_running = False
+    
+        # Initialize CoinGecko handler with 60s cache duration
+        self.coingecko = CoinGeckoHandler(
+            base_url=self.config.COINGECKO_BASE_URL,
+            cache_duration=60
+        )
+
+        # Target chains to analyze
+        self.target_chains = {
+            'BTC': 'bitcoin',
+            'ETH': 'ethereum',
+            'SOL': 'solana',
+            'XRP': 'ripple',
+            'BNB': 'binancecoin',
+            'AVAX': 'avalanche-2',
+            'DOT': 'polkadot',
+            'UNI': 'uniswap',
+            'NEAR': 'near',
+            'AAVE': 'aave',
+            'FIL': 'filecoin',
+            'POL': 'matic-network',
+            'KAITO': 'kaito'  # Kept in the list but not given special treatment
+        }
+
+        # All tokens for reference and comparison
+        self.reference_tokens = list(self.target_chains.keys())
+    
+        # Chain name mapping for display
+        self.chain_name_mapping = self.target_chains.copy()
+    
+        self.CORRELATION_THRESHOLD = 0.75  
+        self.VOLUME_THRESHOLD = 0.60  
+        self.TIME_WINDOW = 24
+    
+        # Smart money thresholds
+        self.SMART_MONEY_VOLUME_THRESHOLD = 1.5  # 50% above average
+        self.SMART_MONEY_ZSCORE_THRESHOLD = 2.0  # 2 standard deviations
+    
+        # Timeframe-specific triggers and thresholds
+        self.timeframe_thresholds = {
+            "1h": {
+                "price_change": 3.0,    # 3% price change for 1h predictions
+                "volume_change": 8.0,   # 8% volume change
+                "confidence": 70,       # Minimum confidence percentage
+                "fomo_factor": 1.0      # FOMO enhancement factor
+            },
+            "24h": {
+                "price_change": 5.0,    # 5% price change for 24h predictions
+                "volume_change": 12.0,  # 12% volume change
+                "confidence": 65,       # Slightly lower confidence for longer timeframe
+                "fomo_factor": 1.2      # Higher FOMO factor
+            },
+            "7d": {
+                "price_change": 8.0,    # 8% price change for 7d predictions
+                "volume_change": 15.0,  # 15% volume change
+                "confidence": 60,       # Even lower confidence for weekly predictions
+                "fomo_factor": 1.5      # Highest FOMO factor
+            }
+        }
+    
+        # Initialize scheduled timeframe posts
+        self.next_scheduled_posts = {
+            "1h": datetime.now() + timedelta(minutes=random.randint(10, 30)),
+            "24h": datetime.now() + timedelta(hours=random.randint(1, 3)),
+            "7d": datetime.now() + timedelta(hours=random.randint(4, 8))
+        }
+    
+        # Initialize reply functionality components
+        self.timeline_scraper = TimelineScraper(self.browser, self.config, self.config.db)
+        self.reply_handler = ReplyHandler(self.browser, self.config, self.llm_provider, self.coingecko, self.config.db)
+        self.content_analyzer = ContentAnalyzer(self.config, self.config.db)
+    
+        # Reply tracking and control
+        self.last_reply_check = datetime.now() - timedelta(minutes=30)  # Start checking soon
+        self.reply_check_interval = 5  # Check for posts to reply to every 60 minutes
+        self.max_replies_per_cycle = 10  # Maximum 10 replies per cycle
+        self.reply_cooldown = 5  # Minutes between reply cycles
+        self.last_reply_time = datetime.now() - timedelta(minutes=self.reply_cooldown)  # Allow immediate first run
+    
+        # Initialize Warpcast integration
+        self.warpcast = WarpcastIntegration(self.config, self.config.db)
+    
+        logger.log_startup()
 
     @ensure_naive_datetimes
     def _check_for_reply_opportunities(self, market_data: Dict[str, Any]) -> bool:
         """
-        Check for posts to reply to and generate replies
+        Check for posts to reply to and generate replies with enhanced content analysis
         Returns True if any replies were posted
         """
-        now = datetime.now()
+        now = strip_timezone(datetime.now())
 
         # Check if it's time to look for posts to reply to
-        time_since_last_check = (now - self.last_reply_check).total_seconds() / 60
+        time_since_last_check = safe_datetime_diff(now, self.last_reply_check) / 60
         if time_since_last_check < self.reply_check_interval:
             logger.logger.debug(f"Skipping reply check, {time_since_last_check:.1f} minutes since last check (interval: {self.reply_check_interval})")
             return False
     
         # Also check cooldown period
-        time_since_last_reply = (now - self.last_reply_time).total_seconds() / 60
+        time_since_last_reply = safe_datetime_diff(now, self.last_reply_time) / 60
         if time_since_last_reply < self.reply_cooldown:
             logger.logger.debug(f"In reply cooldown period, {time_since_last_reply:.1f} minutes since last reply (cooldown: {self.reply_cooldown})")
             return False
@@ -179,8 +214,8 @@ class CryptoAnalysisBot:
         self.last_reply_check = now
     
         try:
-            # Scrape timeline for posts
-            posts = self.timeline_scraper.scrape_timeline(count=self.max_replies_per_cycle * 2)  # Get more to filter
+            # Scrape timeline for posts - get more to allow for better filtering
+            posts = self.timeline_scraper.scrape_timeline(count=self.max_replies_per_cycle * 3)
             logger.logger.info(f"Timeline scraping completed - found {len(posts) if posts else 0} posts")
     
             if not posts:
@@ -188,37 +223,58 @@ class CryptoAnalysisBot:
                 return False
 
             # Log sample posts for debugging
-            for i, post in enumerate(posts[:3]):  # Log first 3 posts
-                logger.logger.info(f"Sample post {i}: {post.get('content', '')[:100]}...")
+            for i, post in enumerate(posts[:3]):
+                logger.logger.info(f"Sample post {i}: {post.get('text', '')[:100]}...")
 
-            # Find market-related posts
+            # Enhanced filtering using ContentAnalyzer's comprehensive methods
+            # First find market-related posts
             logger.logger.info(f"Finding market-related posts among {len(posts)} scraped posts")
             market_posts = self.content_analyzer.find_market_related_posts(posts)
             logger.logger.info(f"Found {len(market_posts)} market-related posts, checking which ones need replies")
         
             # Filter out posts we've already replied to
-            unreplied_posts = self.timeline_scraper.filter_already_replied_posts(market_posts)
+            unreplied_posts = self.content_analyzer.filter_already_replied_posts(market_posts)
             logger.logger.info(f"Found {len(unreplied_posts)} unreplied market-related posts")
-            if unreplied_posts:
-                for i, post in enumerate(unreplied_posts[:3]):
-                    logger.logger.info(f"Sample unreplied post {i}: {post.get('content', '')[:100]}...")
         
             if not unreplied_posts:
                 return False
             
-            # Prioritize posts (engagement, relevance, etc.)
-            prioritized_posts = self.timeline_scraper.prioritize_posts(unreplied_posts)
+            # Analyze content of each post for engagement metrics
+            analyzed_posts = []
+            for post in unreplied_posts:
+                analysis = self.content_analyzer.analyze_post(post)
+                # Add the analysis to the post
+                post['content_analysis'] = analysis
+                analyzed_posts.append(post)
+            
+            # Only reply to posts worth replying to based on ContentAnalyzer scoring
+            reply_worthy_posts = [post for post in analyzed_posts if post['content_analysis'].get('reply_worthy', False)]
+            logger.logger.info(f"Found {len(reply_worthy_posts)} reply-worthy posts")
         
-            # Limit to max replies per cycle
-            posts_to_reply = prioritized_posts[:self.max_replies_per_cycle]
+            # Further prioritize high-value posts
+            high_value_posts = [post for post in reply_worthy_posts if post['content_analysis'].get('high_value', False)]
         
-            # Generate and post replies
+            # Balance between high value and regular posts to ensure diversity
+            posts_to_reply = high_value_posts[:int(self.max_replies_per_cycle * 0.7)]  # 70% high value
+            remaining_slots = self.max_replies_per_cycle - len(posts_to_reply)
+        
+            # Add remaining medium-value posts sorted by reply score
+            if remaining_slots > 0:
+                medium_value_posts = [p for p in reply_worthy_posts if p not in high_value_posts]
+                medium_value_posts.sort(key=lambda x: x['content_analysis'].get('reply_score', 0), reverse=True)
+                posts_to_reply.extend(medium_value_posts[:remaining_slots])
+        
+            if not posts_to_reply:
+                logger.logger.info("No posts worth replying to found")
+                return False
+            
+            # Generate and post replies using enhanced reply metadata
             logger.logger.info(f"Starting to reply to {len(posts_to_reply)} prioritized posts")
             successful_replies = self.reply_handler.reply_to_posts(posts_to_reply, market_data, max_replies=self.max_replies_per_cycle)
         
             if successful_replies > 0:
                 logger.logger.info(f"Successfully posted {successful_replies} replies")
-                self.last_reply_time = now                    
+                self.last_reply_time = now
                 return True
             else:
                 logger.logger.info("No replies were successfully posted")
@@ -417,46 +473,71 @@ class CryptoAnalysisBot:
        logger.logger.info("Prediction processing thread stopped")
 
     def _login_to_twitter(self) -> bool:
-       """Log into Twitter with enhanced verification"""
-       try:
-           logger.logger.info("Starting Twitter login")
-           self.browser.driver.set_page_load_timeout(45)
-           self.browser.driver.get('https://twitter.com/login')
-           time.sleep(5)
+        """Log into Twitter with enhanced verification and detection of existing sessions"""
+        try:
+            logger.logger.info("Starting Twitter login")
+            self.browser.driver.set_page_load_timeout(45)
+        
+            # First navigate to Twitter home page instead of login page directly
+            self.browser.driver.get('https://twitter.com')
+            time.sleep(5)
+        
+            # Check if we're already logged in
+            already_logged_in = False
+            login_indicators = [
+                '[data-testid="SideNav_NewTweet_Button"]',
+                '[data-testid="AppTabBar_Profile_Link"]',
+                '[aria-label="Tweet"]',
+                '.DraftEditor-root'  # Tweet composer element
+            ]
+        
+            for indicator in login_indicators:
+                try:
+                    if self.browser.check_element_exists(indicator):
+                        already_logged_in = True
+                        logger.logger.info("Already logged into Twitter, using existing session")
+                        return True
+                except Exception:
+                    continue
+        
+            if not already_logged_in:
+                logger.logger.info("Not logged in, proceeding with login process")
+                self.browser.driver.get('https://twitter.com/login')
+                time.sleep(5)
 
-           username_field = WebDriverWait(self.browser.driver, 20).until(
-               EC.element_to_be_clickable((By.CSS_SELECTOR, "input[autocomplete='username']"))
-           )
-           username_field.click()
-           time.sleep(1)
-           username_field.send_keys(self.config.TWITTER_USERNAME)
-           time.sleep(2)
+                username_field = WebDriverWait(self.browser.driver, 20).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "input[autocomplete='username']"))
+                )
+                username_field.click()
+                time.sleep(1)
+                username_field.send_keys(self.config.TWITTER_USERNAME)
+                time.sleep(2)
 
-           next_button = WebDriverWait(self.browser.driver, 10).until(
-               EC.element_to_be_clickable((By.XPATH, "//span[text()='Next']"))
-           )
-           next_button.click()
-           time.sleep(3)
+                next_button = WebDriverWait(self.browser.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//span[text()='Next']"))
+                )
+                next_button.click()
+                time.sleep(3)
 
-           password_field = WebDriverWait(self.browser.driver, 20).until(
-               EC.element_to_be_clickable((By.CSS_SELECTOR, "input[type='password']"))
-           )
-           password_field.click()
-           time.sleep(1)
-           password_field.send_keys(self.config.TWITTER_PASSWORD)
-           time.sleep(2)
+                password_field = WebDriverWait(self.browser.driver, 20).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "input[type='password']"))
+                )
+                password_field.click()
+                time.sleep(1)
+                password_field.send_keys(self.config.TWITTER_PASSWORD)
+                time.sleep(2)
 
-           login_button = WebDriverWait(self.browser.driver, 10).until(
-               EC.element_to_be_clickable((By.XPATH, "//span[text()='Log in']"))
-           )
-           login_button.click()
-           time.sleep(10) 
+                login_button = WebDriverWait(self.browser.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//span[text()='Log in']"))
+                )
+                login_button.click()
+                time.sleep(10)
 
-           return self._verify_login()
+            return self._verify_login()
 
-       except Exception as e:
-           logger.log_error("Twitter Login", str(e))
-           return False
+        except Exception as e:
+            logger.log_error("Twitter Login", str(e))
+            return False
 
     def _verify_login(self) -> bool:
        """Verify Twitter login success"""
@@ -501,81 +582,169 @@ class CryptoAnalysisBot:
            logger.logger.debug(f"Queued {timeframe} prediction for {token}")
 
     def _post_analysis(self, tweet_text: str, timeframe: str = "1h") -> bool:
-       """
-       Post analysis to Twitter with robust button handling
-       Tracks post by timeframe
-       """
-       max_retries = 3
-       retry_count = 0
-       
-       while retry_count < max_retries:
-           try:
-               self.browser.driver.get('https://twitter.com/compose/tweet')
-               time.sleep(3)
-               
-               text_area = WebDriverWait(self.browser.driver, 10).until(
-                   EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweetTextarea_0"]'))
-               )
-               text_area.click()
-               time.sleep(1)
-               
-               # Ensure tweet text only contains BMP characters
-               safe_tweet_text = ''.join(char for char in tweet_text if ord(char) < 0x10000)
-               
-               # Simply send the tweet text directly - no handling of hashtags needed
-               text_area.send_keys(safe_tweet_text)
-               time.sleep(2)
+        """
+        Post analysis to Twitter with robust button handling
+        Supports posting to Warpcast if enabled
+        Tracks post by timeframe
+        """
+        max_retries = 3
+        retry_count = 0
+        twitter_success = False
+        warpcast_success = False
+    
+        while retry_count < max_retries:
+            try:
+                # Post to Twitter
+                self.browser.driver.get('https://twitter.com/compose/tweet')
+                time.sleep(3)
+            
+                text_area = WebDriverWait(self.browser.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweetTextarea_0"]'))
+                )
+                text_area.click()
+                time.sleep(1)
+            
+                # Ensure tweet text only contains BMP characters
+                safe_tweet_text = ''.join(char for char in tweet_text if ord(char) < 0x10000)
+            
+                # Simply send the tweet text directly - no handling of hashtags needed
+                text_area.send_keys(safe_tweet_text)
+                time.sleep(2)
 
-               post_button = None
-               button_locators = [
-                   (By.CSS_SELECTOR, '[data-testid="tweetButton"]'),
-                   (By.XPATH, "//div[@role='button'][contains(., 'Post')]"),
-                   (By.XPATH, "//span[text()='Post']")
-               ]
+                post_button = None
+                button_locators = [
+                    (By.CSS_SELECTOR, '[data-testid="tweetButton"]'),
+                    (By.XPATH, "//div[@role='button'][contains(., 'Post')]"),
+                    (By.XPATH, "//span[text()='Post']")
+                ]
 
-               for locator in button_locators:
-                   try:
-                       post_button = WebDriverWait(self.browser.driver, 5).until(
-                           EC.element_to_be_clickable(locator)
-                       )
-                       if post_button:
-                           break
-                   except:
-                       continue
+                for locator in button_locators:
+                    try:
+                        post_button = WebDriverWait(self.browser.driver, 5).until(
+                            EC.element_to_be_clickable(locator)
+                        )
+                        if post_button:
+                            break
+                    except:
+                        continue
 
-               if post_button:
-                   self.browser.driver.execute_script("arguments[0].scrollIntoView(true);", post_button)
-                   time.sleep(1)
-                   self.browser.driver.execute_script("arguments[0].click();", post_button)
-                   time.sleep(5)
-                   
-                   # Update last post time for this timeframe
-                   self.timeframe_last_post[timeframe] = datetime.now()
-                   
-                   # Update next scheduled post time
-                   hours_to_add = self.timeframe_posting_frequency.get(timeframe, 1)
-                   # Add some randomness to prevent predictable patterns
-                   jitter = random.uniform(0.8, 1.2)
-                   self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=hours_to_add * jitter)
-                   
-                   logger.logger.info(f"{timeframe} tweet posted successfully")
-                   logger.logger.debug(f"Next {timeframe} post scheduled for {self.next_scheduled_posts[timeframe]}")
-                   return True
-               else:
-                   logger.logger.error(f"Could not find post button for {timeframe} tweet")
-                   retry_count += 1
-                   time.sleep(2)
-                   
-           except Exception as e:
-               logger.logger.error(f"{timeframe} tweet posting error, attempt {retry_count + 1}: {str(e)}")
-               retry_count += 1
-               wait_time = retry_count * 10
-               logger.logger.warning(f"Waiting {wait_time}s before retry...")
-               time.sleep(wait_time)
-               continue
-       
-       logger.log_error(f"Tweet Creation - {timeframe}", "Maximum retries reached")
-       return False
+                if post_button:
+                    self.browser.driver.execute_script("arguments[0].scrollIntoView(true);", post_button)
+                    time.sleep(1)
+                    self.browser.driver.execute_script("arguments[0].click();", post_button)
+                    time.sleep(5)
+                
+                    # Update last post time for this timeframe
+                    self.timeframe_last_post[timeframe] = datetime.now()
+                
+                    # Update next scheduled post time
+                    hours_to_add = self.timeframe_posting_frequency.get(timeframe, 1)
+                    # Add some randomness to prevent predictable patterns
+                    jitter = random.uniform(0.8, 1.2)
+                    self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=hours_to_add * jitter)
+                
+                    logger.logger.info(f"{timeframe} tweet posted successfully to Twitter")
+                    logger.logger.debug(f"Next {timeframe} post scheduled for {self.next_scheduled_posts[timeframe]}")
+                    twitter_success = True
+                
+                    # Now try posting to Warpcast if enabled
+                    if hasattr(self, 'warpcast') and hasattr(self.config, 'WARPCAST_ENABLED') and self.config.WARPCAST_ENABLED:
+                        try:
+                            # Extract token name from tweet text
+                            token_match = re.search(r'#([A-Z]+)', tweet_text)
+                            token = token_match.group(1) if token_match else None
+                    
+                            if token and token in self.reference_tokens:
+                                # If it's a token-specific analysis
+                                warpcast_success = self.warpcast.post_analysis(
+                                    token=token,
+                                    analysis=tweet_text,
+                                    market_data=self.last_market_data if self.last_market_data else {},
+                                    timeframe=timeframe
+                                )
+                            else:
+                                # Generic analysis or correlation matrix
+                                if "CORRELATION MATRIX" in tweet_text:
+                                    warpcast_success = self.warpcast.post_correlation_matrix(
+                                        correlation_report=tweet_text,
+                                        timeframe=timeframe
+                                    )
+                                else:
+                                    warpcast_success = self.warpcast.post_content(
+                                        content=tweet_text,
+                                        trigger_type=f"analysis_{timeframe}",
+                                        is_prediction=False,
+                                        timeframe=timeframe
+                                    )
+                    
+                            if warpcast_success:
+                                logger.logger.info(f"{timeframe} analysis posted successfully to Warpcast")
+                            else:
+                                logger.logger.warning(f"Failed to post {timeframe} analysis to Warpcast")
+                        except Exception as warp_e:
+                            logger.logger.error(f"Warpcast posting error: {str(warp_e)}")
+                            logger.log_error("Warpcast Posting", str(warp_e))
+                            warpcast_success = False
+                
+                    # Return success if at least one platform succeeded
+                    return twitter_success or warpcast_success
+                else:
+                    logger.logger.error(f"Could not find post button for {timeframe} tweet")
+                    retry_count += 1
+                    time.sleep(2)
+                
+            except Exception as e:
+                logger.logger.error(f"{timeframe} tweet posting error, attempt {retry_count + 1}: {str(e)}")
+                retry_count += 1
+                wait_time = retry_count * 10
+                logger.logger.warning(f"Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+                continue
+    
+        # If Twitter posting failed after all retries, attempt Warpcast-only posting if enabled
+        if (not twitter_success and hasattr(self, 'warpcast') and 
+                hasattr(self.config, 'WARPCAST_ENABLED') and self.config.WARPCAST_ENABLED):
+            try:
+                logger.logger.info(f"Twitter posting failed, attempting Warpcast-only posting for {timeframe} analysis")
+            
+                # Extract token name from tweet text
+                token_match = re.search(r'#([A-Z]+)', tweet_text)
+                token = token_match.group(1) if token_match else None
+        
+                if token and token in self.reference_tokens:
+                    # If it's a token-specific analysis
+                    warpcast_success = self.warpcast.post_analysis(
+                        token=token,
+                        analysis=tweet_text,
+                        market_data=self.last_market_data if self.last_market_data else {},
+                        timeframe=timeframe
+                    )
+                else:
+                    # Generic analysis or correlation matrix
+                    if "CORRELATION MATRIX" in tweet_text:
+                        warpcast_success = self.warpcast.post_correlation_matrix(
+                            correlation_report=tweet_text,
+                            timeframe=timeframe
+                        )
+                    else:
+                        warpcast_success = self.warpcast.post_content(
+                            content=tweet_text,
+                            trigger_type=f"analysis_{timeframe}",
+                            is_prediction=False,
+                            timeframe=timeframe
+                        )
+        
+                if warpcast_success:
+                    logger.logger.info(f"{timeframe} analysis posted successfully to Warpcast (Twitter failed)")
+                    return True
+                else:
+                    logger.logger.warning(f"Failed to post {timeframe} analysis to Warpcast (after Twitter failed)")
+            except Exception as warp_e:
+                logger.logger.error(f"Warpcast fallback posting error: {str(warp_e)}")
+                logger.log_error("Warpcast Fallback Posting", str(warp_e))
+    
+        logger.log_error(f"Post Analysis - {timeframe}", "Maximum retries reached for all platforms")
+        return False
    
     def _get_last_posts(self, count: int = 10) -> List[Dict[str, Any]]:
        """
@@ -639,127 +808,247 @@ class CryptoAnalysisBot:
        return filtered_posts[:count]
 
     def _schedule_timeframe_post(self, timeframe: str, delay_hours: float = None) -> None:
-       """
-       Schedule the next post for a specific timeframe
-       """
-       if delay_hours is None:
-           # Use default frequency with some randomness
-           base_hours = self.timeframe_posting_frequency.get(timeframe, 1)
-           delay_hours = base_hours * random.uniform(0.9, 1.1)
-           
-       self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=delay_hours)
-       logger.logger.debug(f"Scheduled next {timeframe} post for {self.next_scheduled_posts[timeframe]}")
+        if delay_hours is None:
+            # Use default frequency with some randomness
+            base_hours = self.timeframe_posting_frequency.get(timeframe, 1)
+            delay_hours = base_hours * random.uniform(0.9, 1.1)
+        
+        self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=delay_hours)
+        logger.logger.debug(f"Scheduled next {timeframe} post for {self.next_scheduled_posts[timeframe]}")
    
     def _should_post_timeframe_now(self, timeframe: str) -> bool:
-       """
-       Check if it's time to post for a specific timeframe
-       """
-       # Check if enough time has passed since last post
-       min_interval = timedelta(hours=self.timeframe_posting_frequency.get(timeframe, 1) * 0.8)
-       if datetime.now() - self.timeframe_last_post.get(timeframe, datetime.min) < min_interval:
-           return False
-           
-       # Check if scheduled time has been reached
-       return datetime.now() >= self.next_scheduled_posts.get(timeframe, datetime.now())
+        """Check if it's time to post for a specific timeframe"""
+        try:
+            # Debug
+            logger.logger.debug(f"Checking if should post for {timeframe}")
+            logger.logger.debug(f"  Last post: {self.timeframe_last_post.get(timeframe)} ({type(self.timeframe_last_post.get(timeframe))})")
+            logger.logger.debug(f"  Next scheduled: {self.next_scheduled_posts.get(timeframe)} ({type(self.next_scheduled_posts.get(timeframe))})")
+        
+            # Check if enough time has passed since last post
+            min_interval = timedelta(hours=self.timeframe_posting_frequency.get(timeframe, 1) * 0.8)
+            last_post_time = self._ensure_datetime(self.timeframe_last_post.get(timeframe, datetime.min))
+            logger.logger.debug(f"  Last post time (after ensure): {last_post_time} ({type(last_post_time)})")
+        
+            time_since_last = datetime.now() - last_post_time
+            if time_since_last < min_interval:
+                return False
+            
+            # Check if scheduled time has been reached
+            next_scheduled = self._ensure_datetime(self.next_scheduled_posts.get(timeframe, datetime.now()))
+            logger.logger.debug(f"  Next scheduled (after ensure): {next_scheduled} ({type(next_scheduled)})")
+        
+            return datetime.now() >= next_scheduled
+        except Exception as e:
+            logger.logger.error(f"Error in _should_post_timeframe_now for {timeframe}: {str(e)}")
+            # Provide a safe default
+            return False
    
     def _post_prediction_for_timeframe(self, token: str, market_data: Dict[str, Any], timeframe: str) -> bool:
-       """
-       Post a prediction for a specific timeframe
-       """
-       try:
-           # Check if we have a prediction
-           prediction = self.timeframe_predictions.get(timeframe, {}).get(token)
-           
-           # If no prediction exists, generate one
-           if not prediction:
-               prediction = self.prediction_engine.generate_prediction(
-                   token=token,
-                   market_data=market_data,
-                   timeframe=timeframe
-               )
-               
-               # Store for future use
-               if timeframe not in self.timeframe_predictions:
-                   self.timeframe_predictions[timeframe] = {}
-               self.timeframe_predictions[timeframe][token] = prediction
-           
-           # Format the prediction for posting
-           tweet_text = self._format_prediction_tweet(token, prediction, market_data, timeframe)
-           
-           # Check for duplicates
-           last_posts = self._get_last_posts_by_timeframe(timeframe=timeframe)
-           if self._is_duplicate_analysis(tweet_text, last_posts, timeframe):
-               logger.logger.warning(f"Skipping duplicate {timeframe} prediction for {token}")
-               return False
-               
-           # Post the prediction
-           if self._post_analysis(tweet_text, timeframe):
-               # Store in database
-               sentiment = prediction.get("sentiment", "NEUTRAL")
-               price_data = {token: {'price': market_data[token]['current_price'], 
+        """
+        Post a prediction for a specific timeframe to Twitter and Warpcast
+        """
+        try:
+            # Check if we have a prediction
+            prediction = self.timeframe_predictions.get(timeframe, {}).get(token)
+
+            # If no prediction exists, generate one
+            if not prediction:
+                prediction = self.prediction_engine.generate_prediction(
+                    token=token,
+                    market_data=market_data,
+                    timeframe=timeframe
+                )
+        
+                # Store for future use
+                if timeframe not in self.timeframe_predictions:
+                    self.timeframe_predictions[timeframe] = {}
+                self.timeframe_predictions[timeframe][token] = prediction
+
+            # Format the prediction for posting
+            tweet_text = self._format_prediction_tweet(token, prediction, market_data, timeframe)
+
+            # Check for duplicates - make sure we're handling datetime properly
+            last_posts = self._get_last_posts_by_timeframe(timeframe=timeframe)
+
+            # Ensure datetime compatibility in duplicate check
+            if self._is_duplicate_analysis(tweet_text, last_posts, timeframe):
+                logger.logger.warning(f"Skipping duplicate {timeframe} prediction for {token}")
+                return False
+        
+            # Post to Twitter
+            twitter_success = self._post_analysis(tweet_text, timeframe)
+        
+            # Post to Warpcast if enabled (regardless of Twitter success)
+            warpcast_success = False
+            if hasattr(self, 'warpcast') and hasattr(self.config, 'WARPCAST_ENABLED') and self.config.WARPCAST_ENABLED:
+                try:
+                    warpcast_success = self.warpcast.post_prediction(
+                        token=token,
+                        prediction=prediction,
+                        market_data=market_data,
+                        timeframe=timeframe
+                    )
+            
+                    if warpcast_success:
+                        logger.logger.info(f"Successfully posted {timeframe} prediction for {token} to Warpcast")
+                    else:
+                        logger.logger.warning(f"Failed to post {timeframe} prediction for {token} to Warpcast")
+                except Exception as warp_e:
+                    logger.logger.error(f"Warpcast prediction posting error: {str(warp_e)}")
+                    logger.log_error(f"Warpcast Prediction Posting - {token} ({timeframe})", str(warp_e))
+                    warpcast_success = False
+        
+            # Store in database if either platform succeeds
+            if twitter_success or warpcast_success:
+                # Store in database
+                sentiment = prediction.get("sentiment", "NEUTRAL")
+                price_data = {token: {'price': market_data[token]['current_price'], 
                                     'volume': market_data[token]['volume']}}
-               
-               # Create storage data
-               storage_data = {
-                   'content': tweet_text,
-                   'sentiment': {token: sentiment},
-                   'trigger_type': f"scheduled_{timeframe}_post",
-                   'price_data': price_data,
-                   'meme_phrases': {token: ""},  # No meme phrases for predictions
-                   'is_prediction': True,
-                   'prediction_data': prediction,
-                   'timeframe': timeframe
-               }
-               
-               # Store in database
-               self.config.db.store_posted_content(**storage_data)
-               
-               logger.logger.info(f"Successfully posted {timeframe} prediction for {token}")
-               return True
-           else:
-               logger.logger.error(f"Failed to post {timeframe} prediction for {token}")
-               return False
-               
-       except Exception as e:
-           logger.log_error(f"Post Prediction For Timeframe - {token} ({timeframe})", str(e))
-           return False
+        
+                # Create storage data
+                storage_data = {
+                    'content': tweet_text,
+                    'sentiment': {token: sentiment},
+                    'trigger_type': f"scheduled_{timeframe}_post",
+                    'price_data': price_data,
+                    'meme_phrases': {token: ""},  # No meme phrases for predictions
+                    'is_prediction': True,
+                    'prediction_data': prediction,
+                    'timeframe': timeframe,
+                    'warpcast_posted': warpcast_success,
+                    'twitter_posted': twitter_success
+                }
+        
+                # Store in database
+                self.config.db.store_posted_content(**storage_data)
+        
+                # Update last post time for this timeframe with current datetime
+                # This is important - make sure we're storing a datetime object
+                self.timeframe_last_post[timeframe] = datetime.now()
+        
+                logger.logger.info(f"Successfully posted {timeframe} prediction for {token} to at least one platform")
+                return True
+            else:
+                logger.logger.error(f"Failed to post {timeframe} prediction for {token} to any platform")
+                return False
+        
+        except Exception as e:
+            logger.log_error(f"Post Prediction For Timeframe - {token} ({timeframe})", str(e))
+            return False
    
     def _post_timeframe_rotation(self, market_data: Dict[str, Any]) -> bool:
-       """
-       Post predictions in a rotation across timeframes
-       Returns True if any prediction was posted
-       """
-       # First check if any timeframe is due for posting
-       due_timeframes = [tf for tf in self.timeframes if self._should_post_timeframe_now(tf)]
-       
-       if not due_timeframes:
-           logger.logger.debug("No timeframes due for posting")
-           return False
-           
-       # Pick the most overdue timeframe
-       chosen_timeframe = max(due_timeframes, 
-                             key=lambda tf: safe_datetime_diff(datetime.now(), self._ensure_datetime(self.next_scheduled_posts.get(tf, datetime.min)))
-       )
-       
-       logger.logger.info(f"Selected {chosen_timeframe} for timeframe rotation posting")
+        """Post predictions in a rotation across timeframes with enhanced token selection and datetime handling"""
+        # Debug timeframe scheduling data
+        logger.logger.debug("TIMEFRAME ROTATION DEBUG:")
+        for tf in self.timeframes:
+            try:
+                now = strip_timezone(datetime.now())
+                last_post_time = strip_timezone(self._ensure_datetime(self.timeframe_last_post.get(tf)))
+                next_scheduled_time = strip_timezone(self._ensure_datetime(self.next_scheduled_posts.get(tf)))
+            
+                time_since_last = safe_datetime_diff(now, last_post_time) / 3600
+                time_until_next = safe_datetime_diff(next_scheduled_time, now) / 3600
+                logger.logger.debug(f"{tf}: {time_since_last:.1f}h since last post, {time_until_next:.1f}h until next")
+            except Exception as e:
+                logger.logger.error(f"Error calculating timeframe timing for {tf}: {str(e)}")
+        
+        # First check if any timeframe is due for posting
+        due_timeframes = [tf for tf in self.timeframes if self._should_post_timeframe_now(tf)]
 
-       # Choose best token for this timeframe
-       token_to_post = self._select_best_token_for_timeframe(market_data, chosen_timeframe)
-       
-       if not token_to_post:
-           logger.logger.warning(f"No suitable token found for {chosen_timeframe} timeframe")
-           # Reschedule this timeframe for later
-           self._schedule_timeframe_post(chosen_timeframe, delay_hours=1)
-           return False
-           
-       # Post the prediction
-       success = self._post_prediction_for_timeframe(token_to_post, market_data, chosen_timeframe)
-       
-       # If post failed, reschedule for later
-       if not success:
-           self._schedule_timeframe_post(chosen_timeframe, delay_hours=1)
-           
-       return success
+        if not due_timeframes:
+            logger.logger.debug("No timeframes due for posting")
+            return False
+    
+        try:
+            # Pick the most overdue timeframe
+            now = strip_timezone(datetime.now())
+        
+            chosen_timeframe = None
+            max_overdue_time = timedelta(0)
+        
+            for tf in due_timeframes:
+                next_scheduled = strip_timezone(self._ensure_datetime(self.next_scheduled_posts.get(tf, datetime.min)))
+                overdue_time = safe_datetime_diff(now, next_scheduled)
+            
+                if overdue_time > max_overdue_time.total_seconds():
+                    max_overdue_time = timedelta(seconds=overdue_time)
+                    chosen_timeframe = tf
+                
+            if not chosen_timeframe:
+                logger.logger.warning("Could not find most overdue timeframe, using first available")
+                chosen_timeframe = due_timeframes[0]
+            
+        except ValueError as ve:
+            if "arg is an empty sequence" in str(ve):
+                logger.logger.warning("No timeframes available for rotation, rescheduling all timeframes")
+                # Reschedule all timeframes with random delays
+                now = strip_timezone(datetime.now())
+                for tf in self.timeframes:
+                    delay_hours = self.timeframe_posting_frequency.get(tf, 1) * random.uniform(0.1, 0.3)
+                    self.next_scheduled_posts[tf] = now + timedelta(hours=delay_hours)
+                return False
+            else:
+                raise  # Re-raise if it's a different ValueError
+        
+        logger.logger.info(f"Selected {chosen_timeframe} for timeframe rotation posting")
+
+        # Enhanced token selection using content analysis and reply data
+        token_to_post = self._select_best_token_for_timeframe(market_data, chosen_timeframe)
+    
+        if not token_to_post:
+            logger.logger.warning(f"No suitable token found for {chosen_timeframe} timeframe")
+            # Reschedule this timeframe for later
+            now = strip_timezone(datetime.now())
+            self._schedule_timeframe_post(chosen_timeframe, delay_hours=1)
+            return False
+    
+        # Before posting, check if there's active community discussion about this token
+        # This helps align our posts with current community interests
+        try:
+            # Get recent timeline posts to analyze community trends
+            recent_posts = self.timeline_scraper.scrape_timeline(count=25)
+            if recent_posts:
+                # Filter for posts related to our selected token
+                token_related_posts = [p for p in recent_posts if token_to_post.upper() in p.get('text', '').upper()]
+        
+                # If we found significant community discussion, give this token higher priority
+                if len(token_related_posts) >= 3:
+                    logger.logger.info(f"Found active community discussion about {token_to_post} ({len(token_related_posts)} recent posts)")
+                    # Analyze sentiment to make our post more contextually relevant
+                    sentiment_stats = {
+                        'positive': 0,
+                        'negative': 0,
+                        'neutral': 0
+                    }
+            
+                    # Simple sentiment analysis of community posts
+                    for post in token_related_posts:
+                        analysis = self.content_analyzer.analyze_post(post)
+                        sentiment = analysis.get('features', {}).get('sentiment', {}).get('label', 'neutral')
+                        if sentiment in ['bullish', 'enthusiastic', 'positive']:
+                            sentiment_stats['positive'] += 1
+                        elif sentiment in ['bearish', 'negative', 'skeptical']:
+                            sentiment_stats['negative'] += 1
+                        else:
+                            sentiment_stats['neutral'] += 1
+            
+                    # Log community sentiment
+                    dominant_sentiment = max(sentiment_stats.items(), key=lambda x: x[1])[0]
+                    logger.logger.info(f"Community sentiment for {token_to_post}: {dominant_sentiment} ({sentiment_stats})")
+                else:
+                    logger.logger.debug(f"Limited community discussion about {token_to_post} ({len(token_related_posts)} posts)")
+        except Exception as e:
+            logger.logger.warning(f"Error analyzing community trends: {str(e)}")
+    
+        # Post the prediction
+        success = self._post_prediction_for_timeframe(token_to_post, market_data, chosen_timeframe)
+    
+        # If post failed, reschedule for later
+        if not success:
+            now = strip_timezone(datetime.now())
+            self._schedule_timeframe_post(chosen_timeframe, delay_hours=1)
+    
+        return success
 
     def _select_best_token_for_timeframe(self, market_data: Dict[str, Any], timeframe: str) -> Optional[str]:
         """
@@ -935,49 +1224,59 @@ class CryptoAnalysisBot:
             return False
 
     def _cleanup(self) -> None:
-       """Cleanup resources and save state"""
-       try:
-           # Stop prediction thread if running
-           if self.prediction_thread_running:
-               self.prediction_thread_running = False
-               if self.prediction_thread and self.prediction_thread.is_alive():
-                   self.prediction_thread.join(timeout=5)
-               logger.logger.info("Stopped prediction thread")
-           
-           # Close browser
-           if self.browser:
-               logger.logger.info("Closing browser...")
-               try:
-                   self.browser.close_browser()
-                   time.sleep(1)
-               except Exception as e:
-                   logger.logger.warning(f"Error during browser close: {str(e)}")
-           
-           # Save timeframe prediction data to database for persistence
-           try:
-               timeframe_state = {
-                   "predictions": self.timeframe_predictions,
-                   "last_post": {tf: ts.isoformat() for tf, ts in self.timeframe_last_post.items()},
-                   "next_scheduled": {tf: ts.isoformat() for tf, ts in self.next_scheduled_posts.items()},
-                   "accuracy": self.prediction_accuracy
-               }
-               
-               # Store using the generic JSON data storage
-               self.config.db._store_json_data(
-                   data_type="timeframe_state",
-                   data=timeframe_state
-               )
-               logger.logger.info("Saved timeframe state to database")
-           except Exception as e:
-               logger.logger.warning(f"Failed to save timeframe state: {str(e)}")
-           
-           # Close database connection
-           if self.config:
-               self.config.cleanup()
-               
-           logger.log_shutdown()
-       except Exception as e:
-           logger.log_error("Cleanup", str(e))
+        """Cleanup resources and save state"""
+        try:
+            # Stop prediction thread if running
+            if self.prediction_thread_running:
+                self.prediction_thread_running = False
+                if self.prediction_thread and self.prediction_thread.is_alive():
+                    self.prediction_thread.join(timeout=5)
+                logger.logger.info("Stopped prediction thread")
+        
+            # Close browser
+            if self.browser:
+                logger.logger.info("Closing browser...")
+                try:
+                    self.browser.close_browser()
+                    time.sleep(1)
+                except Exception as e:
+                    logger.logger.warning(f"Error during browser close: {str(e)}")
+        
+            # Save timeframe prediction data to database for persistence
+            try:
+                timeframe_state = {
+                    "predictions": self.timeframe_predictions,
+                    "last_post": {tf: ts.isoformat() for tf, ts in self.timeframe_last_post.items()},
+                    "next_scheduled": {tf: ts.isoformat() for tf, ts in self.next_scheduled_posts.items()},
+                    "accuracy": self.prediction_accuracy
+                }
+            
+                # Store using the generic JSON data storage
+                self.config.db._store_json_data(
+                    data_type="timeframe_state",
+                    data=timeframe_state
+                )
+                logger.logger.info("Saved timeframe state to database")
+            except Exception as e:
+                logger.logger.warning(f"Failed to save timeframe state: {str(e)}")
+        
+            # Clean up Warpcast resources if initialized
+            if hasattr(self, 'warpcast') and self.warpcast:
+                try:
+                    logger.logger.info("Closing Warpcast resources...")
+                    # Currently the WarpcastIntegration doesn't have a cleanup method
+                    # But we can add one if needed in the future
+                    # self.warpcast.cleanup()
+                except Exception as e:
+                    logger.logger.warning(f"Error during Warpcast cleanup: {str(e)}")
+        
+            # Close database connection
+            if self.config:
+                self.config.cleanup()
+            
+            logger.log_shutdown()
+        except Exception as e:
+            logger.log_error("Cleanup", str(e))
 
     def _ensure_datetime(self, value):
         """Convert value to datetime if it's a string"""
@@ -1055,63 +1354,89 @@ class CryptoAnalysisBot:
            return None
 
     def _load_saved_timeframe_state(self) -> None:
-       """Load previously saved timeframe state from database"""
-       try:
-           # Query the latest timeframe state
-           conn, cursor = self.config.db._get_connection()
-           
-           cursor.execute("""
-               SELECT data 
-               FROM generic_json_data 
-               WHERE data_type = 'timeframe_state'
-               ORDER BY timestamp DESC
-               LIMIT 1
-           """)
-           
-           result = cursor.fetchone()
-           
-           if not result:
-               logger.logger.info("No saved timeframe state found")
-               return
-               
-           # Parse the saved state
-           state_json = result[0]
-           state = json.loads(state_json)
-           
-           # Restore timeframe predictions
-           for timeframe, predictions in state.get("predictions", {}).items():
-               self.timeframe_predictions[timeframe] = predictions
-           
-           # Restore last post times
-           for timeframe, timestamp in state.get("last_post", {}).items():
-               try:
-                   self.timeframe_last_post[timeframe] = datetime.fromisoformat(timestamp)
-               except (ValueError, TypeError):
-                   # If timestamp can't be parsed, use a safe default
-                   self.timeframe_last_post[timeframe] = datetime.now() - timedelta(hours=3)
-           
-           # Restore next scheduled posts
-           for timeframe, timestamp in state.get("next_scheduled", {}).items():
-               try:
-                   self.next_scheduled_posts[timeframe] = datetime.fromisoformat(timestamp)
-                   
-                   # If scheduled time is in the past, reschedule
-                   if self.next_scheduled_posts[timeframe] < datetime.now():
-                       delay_hours = self.timeframe_posting_frequency.get(timeframe, 1) * random.uniform(0.1, 0.5)
-                       self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=delay_hours)
-               except (ValueError, TypeError):
-                   # If timestamp can't be parsed, set a default
-                   delay_hours = self.timeframe_posting_frequency.get(timeframe, 1) * random.uniform(0.1, 0.5)
-                   self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=delay_hours)
-           
-           # Restore accuracy tracking
-           self.prediction_accuracy = state.get("accuracy", {timeframe: {'correct': 0, 'total': 0} for timeframe in self.timeframes})
-           
-           logger.logger.info("Restored timeframe state from database")
-           
-       except Exception as e:
-           logger.log_error("Load Timeframe State", str(e))
-           # Continue with default values
+        """Load previously saved timeframe state from database with enhanced datetime handling"""
+        try:
+            # Query the latest timeframe state
+            conn, cursor = self.config.db._get_connection()
+        
+            cursor.execute("""
+                SELECT data 
+                FROM generic_json_data 
+                WHERE data_type = 'timeframe_state'
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+        
+            result = cursor.fetchone()
+        
+            if not result:
+                logger.logger.info("No saved timeframe state found")
+                return
+            
+            # Parse the saved state
+            state_json = result[0]
+            state = json.loads(state_json)
+        
+            # Restore timeframe predictions
+            for timeframe, predictions in state.get("predictions", {}).items():
+                self.timeframe_predictions[timeframe] = predictions
+        
+            # Restore last post times with proper datetime handling
+            for timeframe, timestamp in state.get("last_post", {}).items():
+                try:
+                    # Convert string to datetime and ensure it's timezone-naive
+                    dt = datetime.fromisoformat(timestamp)
+                    self.timeframe_last_post[timeframe] = strip_timezone(dt)
+                    logger.logger.debug(f"Restored last post time for {timeframe}: {self.timeframe_last_post[timeframe]}")
+                except (ValueError, TypeError) as e:
+                    # If timestamp can't be parsed, use a safe default
+                    logger.logger.warning(f"Could not parse timestamp for {timeframe} last post: {str(e)}")
+                    self.timeframe_last_post[timeframe] = strip_timezone(datetime.now() - timedelta(hours=3))
+        
+            # Restore next scheduled posts with proper datetime handling
+            for timeframe, timestamp in state.get("next_scheduled", {}).items():
+                try:
+                    # Convert string to datetime and ensure it's timezone-naive
+                    dt = datetime.fromisoformat(timestamp)
+                    scheduled_time = strip_timezone(dt)
+                
+                    # If scheduled time is in the past, reschedule
+                    now = strip_timezone(datetime.now())
+                    if scheduled_time < now:
+                        delay_hours = self.timeframe_posting_frequency.get(timeframe, 1) * random.uniform(0.1, 0.5)
+                        self.next_scheduled_posts[timeframe] = now + timedelta(hours=delay_hours)
+                        logger.logger.debug(f"Rescheduled {timeframe} post for {self.next_scheduled_posts[timeframe]}")
+                    else:
+                        self.next_scheduled_posts[timeframe] = scheduled_time
+                        logger.logger.debug(f"Restored next scheduled time for {timeframe}: {self.next_scheduled_posts[timeframe]}")
+                except (ValueError, TypeError) as e:
+                    # If timestamp can't be parsed, set a default
+                    logger.logger.warning(f"Could not parse timestamp for {timeframe} next scheduled post: {str(e)}")
+                    delay_hours = self.timeframe_posting_frequency.get(timeframe, 1) * random.uniform(0.1, 0.5)
+                    self.next_scheduled_posts[timeframe] = strip_timezone(datetime.now() + timedelta(hours=delay_hours))
+        
+            # Restore accuracy tracking
+            self.prediction_accuracy = state.get("accuracy", {timeframe: {'correct': 0, 'total': 0} for timeframe in self.timeframes})
+        
+            # Debug log the restored state
+            logger.logger.debug("Restored timeframe state:")
+            for tf in self.timeframes:
+                last_post = self.timeframe_last_post.get(tf)
+                next_post = self.next_scheduled_posts.get(tf)
+                logger.logger.debug(f"  {tf}: last={last_post}, next={next_post}")
+        
+            logger.logger.info("Restored timeframe state from database")
+        
+        except Exception as e:
+            logger.log_error("Load Timeframe State", str(e))
+            # Create safe defaults for all timing data
+            now = strip_timezone(datetime.now())
+            for timeframe in self.timeframes:
+                self.timeframe_last_post[timeframe] = now - timedelta(hours=3)
+                delay_hours = self.timeframe_posting_frequency.get(timeframe, 1) * random.uniform(0.1, 0.5)
+                self.next_scheduled_posts[timeframe] = now + timedelta(hours=delay_hours)
+        
+            logger.logger.warning("Using default timeframe state due to error")
 
     def _get_historical_price_data(self, chain: str, hours: int = None, timeframe: str = "1h") -> List[Dict[str, Any]]:
        """
@@ -3410,51 +3735,70 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
         try:
             # First, evaluate any expired predictions
             self._evaluate_expired_predictions()
-        
+            logger.logger.debug("TIMEFRAME DEBUGGING INFO:")
+            for tf in self.timeframes:
+                logger.logger.debug(f"Timeframe: {tf}")
+                last_post = self.timeframe_last_post.get(tf)
+                next_scheduled = self.next_scheduled_posts.get(tf)
+                logger.logger.debug(f"  last_post type: {type(last_post)}, value: {last_post}")
+                logger.logger.debug(f"  next_scheduled type: {type(next_scheduled)}, value: {next_scheduled}")
+            
             # Get market data
             market_data = self._get_crypto_data()
             if not market_data:
                 logger.logger.error("Failed to fetch market data")
                 return
-            
+        
             # Get available tokens
             available_tokens = [token for token in self.reference_tokens if token in market_data]
             if not available_tokens:
                 logger.logger.error("No token data available")
                 return
+        
+            # Decide what type of content to prioritize
+            post_priority = self._decide_post_type(market_data)
+
+            # Act based on the decision
+            if post_priority == "reply":
+                # Prioritize finding and replying to posts
+                if self._check_for_reply_opportunities(market_data):
+                    logger.logger.info("Successfully posted replies based on priority decision")
+                    return
+                # Fall back to other post types if no reply opportunities
             
+            elif post_priority == "prediction":
+                # Prioritize prediction posts (try timeframe rotation first)
+                if self._post_timeframe_rotation(market_data):
+                    logger.logger.info("Posted scheduled timeframe prediction based on priority decision")
+                    return
+                # Fall back to token-specific predictions for 1h timeframe
+            
+            elif post_priority == "correlation":
+                # Generate and post correlation report
+                report_timeframe = self.timeframes[datetime.now().hour % len(self.timeframes)]
+                correlation_report = self._generate_correlation_report(market_data, timeframe=report_timeframe)
+                if correlation_report and self._post_analysis(correlation_report, timeframe=report_timeframe):
+                    logger.logger.info(f"Posted {report_timeframe} correlation matrix report based on priority decision")
+                    return
+        
             # Initialize trigger_type with a default value to prevent NoneType errors
             trigger_type = "regular_interval"
             
-            # Try scheduled timeframe rotation first - this handles 24h and 7d predictions
-            if self._post_timeframe_rotation(market_data):
-                logger.logger.info("Posted scheduled timeframe prediction in rotation")
-                return
-            
-            # Check if we should check for reply opportunities first
-            # We'll do this with approximately 30% probability to balance original posts and replies
-            should_check_replies = True  # Always check replies for testing
-            if should_check_replies:
-                logger.logger.info("Checking for reply opportunities first")
-                if self._check_for_reply_opportunities(market_data):
-                    logger.logger.info("Successfully posted replies, skipping regular analysis cycle")
-                    return
-            
             # Prioritize tokens instead of just shuffling
             available_tokens = self._prioritize_tokens(available_tokens, market_data)
-        
+    
             # For 1h predictions and regular updates, try each token until we find one that's suitable
             for token_to_analyze in available_tokens:
                 should_post, token_trigger_type = self._should_post_update(token_to_analyze, market_data, timeframe="1h")
-            
+        
                 if should_post:
                     # Update the main trigger_type variable
                     trigger_type = token_trigger_type
                     logger.logger.info(f"Starting {token_to_analyze} analysis cycle - Trigger: {trigger_type}")
-                
+            
                     # Generate prediction for this token with 1h timeframe
                     prediction = self._generate_predictions(token_to_analyze, market_data, timeframe="1h")
-                
+            
                     if not prediction:
                         logger.logger.error(f"Failed to generate 1h prediction for {token_to_analyze}")
                         continue
@@ -3464,14 +3808,14 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
                         token_to_analyze, market_data, trigger_type, timeframe="1h"
                     )
                     prediction_tweet = self._format_prediction_tweet(token_to_analyze, prediction, market_data, timeframe="1h")
-                
+            
                     # Choose which type of content to post based on trigger and past posts
                     # For prediction-specific triggers or every third post, post prediction
                     should_post_prediction = (
                         "prediction" in trigger_type or 
                         random.random() < 0.35  # 35% chance of posting prediction instead of analysis
                     )
-                
+            
                     if should_post_prediction:
                         analysis_to_post = prediction_tweet
                         # Add prediction data to storage
@@ -3482,11 +3826,11 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
                         analysis_to_post = standard_analysis
                         if storage_data:
                             storage_data['is_prediction'] = False
-                
+            
                     if not analysis_to_post:
                         logger.logger.error(f"Failed to generate content for {token_to_analyze}")
                         continue
-                    
+                
                     # Check for duplicates
                     last_posts = self._get_last_posts_by_timeframe(timeframe="1h")
                     if not self._is_duplicate_analysis(analysis_to_post, last_posts, timeframe="1h"):
@@ -3494,20 +3838,20 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
                             # Only store in database after successful posting
                             if storage_data:
                                 self.config.db.store_posted_content(**storage_data)
-                            
+                        
                             logger.logger.info(
                                 f"Successfully posted {token_to_analyze} "
                                 f"{'prediction' if should_post_prediction else 'analysis'} - "
                                 f"Trigger: {trigger_type}"
                             )
-                        
+                    
                             # Store additional smart money metrics
                             if token_to_analyze in market_data:
                                 smart_money = self._analyze_smart_money_indicators(
                                     token_to_analyze, market_data[token_to_analyze], timeframe="1h"
                                 )
                                 self.config.db.store_smart_money_indicators(token_to_analyze, smart_money)
-                            
+                        
                                 # Store market comparison data
                                 vs_market = self._analyze_token_vs_market(token_to_analyze, market_data, timeframe="1h")
                                 if vs_market:
@@ -3518,7 +3862,7 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
                                         vs_market.get('outperforming_market', False),
                                         vs_market.get('correlations', {})
                                     )
-                        
+                    
                             # Successfully posted, so we're done with this cycle
                             return
                         else:
@@ -3529,21 +3873,21 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
                         continue  # Try next token
                 else:
                     logger.logger.debug(f"No significant {token_to_analyze} changes detected, trying another token")
-        
+    
             # If we couldn't find any token-specific update to post, 
             # try posting a correlation report on regular intervals
             if "regular_interval" in trigger_type:
                 # Alternate between different timeframe correlation reports
                 current_hour = datetime.now().hour
                 report_timeframe = self.timeframes[current_hour % len(self.timeframes)]
-                
+            
                 correlation_report = self._generate_correlation_report(market_data, timeframe=report_timeframe)
                 if correlation_report and self._post_analysis(correlation_report, timeframe=report_timeframe):
                     logger.logger.info(f"Posted {report_timeframe} correlation matrix report")
                     return      
 
             # If still no post, try reply opportunities as a last resort
-            if not should_check_replies:  # Only if we haven't checked replies already
+            if post_priority != "reply":  # Only if we haven't already tried replies
                 logger.logger.info("Checking for reply opportunities as fallback")
                 if self._check_for_reply_opportunities(market_data):
                     logger.logger.info("Successfully posted replies as fallback")
@@ -3551,9 +3895,254 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
 
             # If we get here, we tried all tokens but couldn't post anything
             logger.logger.warning("Tried all available tokens but couldn't post any analysis or replies")
-            
+        
         except Exception as e:
             logger.log_error("Token Analysis Cycle", str(e))
+
+    @ensure_naive_datetimes
+    def _decide_post_type(self, market_data: Dict[str, Any]) -> str:
+        """
+        Make a strategic decision on what type of post to prioritize: prediction, analysis, or reply
+    
+        Returns:
+            String indicating the recommended action: "prediction", "analysis", "reply", or "correlation"
+        """
+        try:
+            now = strip_timezone(datetime.now())
+    
+            # Initialize decision factors
+            decision_factors = {
+                'prediction': 0.0,
+                'analysis': 0.0,
+                'reply': 0.0,
+                'correlation': 0.0
+            }
+    
+            # Factor 1: Time since last post of each type
+            # Use existing database methods instead of get_last_post_time
+            try:
+                # Get recent posts from the database
+                recent_posts = self.config.db.get_recent_posts(hours=24)
+        
+                # Find the most recent posts of each type
+                last_analysis_time = None
+                last_prediction_time = None
+                last_correlation_time = None
+        
+                for post in recent_posts:
+                    # Convert timestamp to datetime if it's a string
+                    post_timestamp = post.get('timestamp')
+                    if isinstance(post_timestamp, str):
+                        try:
+                            post_timestamp = datetime.fromisoformat(post_timestamp)
+                        except ValueError:
+                            continue
+            
+                    # Ensure we have a timezone-naive datetime
+                    post_timestamp = strip_timezone(post_timestamp)
+                    if post_timestamp is None:
+                        continue
+            
+                    # Check if it's a prediction post
+                    if post.get('is_prediction', False):
+                        if last_prediction_time is None or post_timestamp > last_prediction_time:
+                            last_prediction_time = post_timestamp
+                    # Check if it's a correlation post
+                    elif 'CORRELATION' in post.get('content', '').upper():
+                        if last_correlation_time is None or post_timestamp > last_correlation_time:
+                            last_correlation_time = post_timestamp
+                    # Otherwise it's an analysis post
+                    else:
+                        if last_analysis_time is None or post_timestamp > last_analysis_time:
+                            last_analysis_time = post_timestamp
+            except Exception as db_err:
+                logger.logger.warning(f"Error retrieving recent posts: {str(db_err)}")
+                last_analysis_time = now - timedelta(hours=12)  # Default fallback
+                last_prediction_time = now - timedelta(hours=12)  # Default fallback
+                last_correlation_time = now - timedelta(hours=48)  # Default fallback
+    
+            # Set default values if no posts found
+            if last_analysis_time is None:
+                last_analysis_time = now - timedelta(hours=24)
+            if last_prediction_time is None:
+                last_prediction_time = now - timedelta(hours=24)
+            if last_correlation_time is None:
+                last_correlation_time = now - timedelta(hours=48)
+            
+            # Calculate hours since each type of post using safe_datetime_diff
+            hours_since_analysis = safe_datetime_diff(now, last_analysis_time) / 3600
+            hours_since_prediction = safe_datetime_diff(now, last_prediction_time) / 3600
+            hours_since_correlation = safe_datetime_diff(now, last_correlation_time) / 3600
+    
+            # Check time since last reply (using our sanitized datetime)
+            last_reply_time = strip_timezone(self._ensure_datetime(self.last_reply_time))
+            hours_since_reply = safe_datetime_diff(now, last_reply_time) / 3600
+    
+            # Add time factors to decision weights (more time = higher weight)
+            decision_factors['prediction'] += min(5.0, hours_since_prediction * 0.5)  # Cap at 5.0
+            decision_factors['analysis'] += min(5.0, hours_since_analysis * 0.5)  # Cap at 5.0
+            decision_factors['reply'] += min(5.0, hours_since_reply * 0.8)  # Higher weight for replies
+            decision_factors['correlation'] += min(3.0, hours_since_correlation * 0.1)  # Lower weight for correlations
+    
+            # Factor 2: Time of day considerations - adjust to audience activity patterns
+            current_hour = now.hour
+    
+            # Morning hours (6-10 AM): Favor analyses and predictions for day traders
+            if 6 <= current_hour <= 10:
+                decision_factors['prediction'] += 2.0
+                decision_factors['analysis'] += 1.5
+                decision_factors['reply'] += 0.5
+        
+            # Mid-day (11-15): Balanced approach, slight favor to replies
+            elif 11 <= current_hour <= 15:
+                decision_factors['prediction'] += 1.0
+                decision_factors['analysis'] += 1.0
+                decision_factors['reply'] += 1.5
+        
+            # Evening hours (16-22): Strong favor to replies to engage with community
+            elif 16 <= current_hour <= 22:
+                decision_factors['prediction'] += 0.5
+                decision_factors['analysis'] += 1.0
+                decision_factors['reply'] += 2.5
+        
+            # Late night (23-5): Favor analyses, deprioritize replies (fewer active users)
+            else:
+                decision_factors['prediction'] += 1.0
+                decision_factors['analysis'] += 2.0
+                decision_factors['reply'] += 0.5
+                decision_factors['correlation'] += 1.5  # Good time for correlation reports
+    
+            # Factor 3: Market volatility - in volatile markets, predictions and analyses are more valuable
+            market_volatility = self._calculate_market_volatility(market_data)
+    
+            # High volatility boosts prediction and analysis priority
+            if market_volatility > 3.0:  # High volatility
+                decision_factors['prediction'] += 2.0
+                decision_factors['analysis'] += 1.5
+            elif market_volatility > 1.5:  # Moderate volatility
+                decision_factors['prediction'] += 1.0
+                decision_factors['analysis'] += 1.0
+    
+            # Factor 4: Community engagement level - check for active discussions
+            active_discussions = self._check_for_active_discussions(market_data)
+            if active_discussions:
+                # If there are active discussions, favor replies
+                decision_factors['reply'] += len(active_discussions) * 0.5  # More discussions = higher priority
+                logger.logger.debug(f"Found {len(active_discussions)} active discussions, boosting reply priority")
+    
+            # Factor 5: Check scheduled timeframe posts - these get high priority
+            due_timeframes = [tf for tf in self.timeframes if self._should_post_timeframe_now(tf)]
+            if due_timeframes:
+                decision_factors['prediction'] += 3.0  # High priority for scheduled predictions
+                logger.logger.debug(f"Scheduled timeframe posts due: {due_timeframes}")
+    
+            # Factor 6: Day of week considerations
+            weekday = now.weekday()  # 0=Monday, 6=Sunday
+    
+            # Weekends: More casual engagement (replies), less formal analysis
+            if weekday >= 5:  # Saturday or Sunday
+                decision_factors['reply'] += 1.5
+                decision_factors['correlation'] += 0.5
+            # Mid-week: Focus on predictions and analysis
+            elif 1 <= weekday <= 3:  # Tuesday to Thursday
+                decision_factors['prediction'] += 1.0
+                decision_factors['analysis'] += 0.5
+    
+            # Log decision factors for debugging
+            logger.logger.debug(f"Post type decision factors: {decision_factors}")
+    
+            # Determine highest priority action
+            highest_priority = max(decision_factors.items(), key=lambda x: x[1])
+            action = highest_priority[0]
+    
+            # Special case: If correlation has reasonable score and it's been a while, prioritize it
+            if hours_since_correlation > 48 and decision_factors['correlation'] > 2.0:
+                action = 'correlation'
+                logger.logger.debug(f"Overriding to correlation post ({hours_since_correlation}h since last one)")
+    
+            logger.logger.info(f"Decided post type: {action} (score: {highest_priority[1]:.2f})")
+            return action
+    
+        except Exception as e:
+            logger.log_error("Decide Post Type", str(e))
+            # Default to analysis as a safe fallback
+            return "analysis"
+        
+    def _calculate_market_volatility(self, market_data: Dict[str, Any]) -> float:
+        """Calculate overall market volatility score based on price movements"""
+        try:
+            if not market_data:
+                return 1.0  # Default moderate volatility
+            
+            # Extract price changes for major tokens
+            major_tokens = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP']
+            changes = []
+        
+            for token in major_tokens:
+                if token in market_data:
+                    change = abs(market_data[token].get('price_change_percentage_24h', 0))
+                    changes.append(change)
+        
+            if not changes:
+                return 1.0
+            
+            # Calculate average absolute price change
+            avg_change = sum(changes) / len(changes)
+        
+            # Calculate volatility score (normalized to a 0-5 scale)
+            # <1% = Very Low, 1-2% = Low, 2-3% = Moderate, 3-5% = High, >5% = Very High
+            if avg_change < 1.0:
+                return 0.5  # Very low volatility
+            elif avg_change < 2.0:
+                return 1.0  # Low volatility
+            elif avg_change < 3.0:
+                return 2.0  # Moderate volatility
+            elif avg_change < 5.0:
+                return 3.0  # High volatility
+            else:
+                return 5.0  # Very high volatility
+    
+        except Exception as e:
+            logger.log_error("Calculate Market Volatility", str(e))
+            return 1.0  # Default to moderate volatility on error
+
+    def _check_for_active_discussions(self, market_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Check for active token discussions that might warrant replies
+    
+        Returns:
+            List of posts representing active discussions
+        """
+        try:
+            # Get recent timeline posts
+            recent_posts = self.timeline_scraper.scrape_timeline(count=15)
+            if not recent_posts:
+                return []
+            
+            # Filter for posts with engagement (replies, likes)
+            engaged_posts = []
+            for post in recent_posts:
+                # Simple engagement check
+                has_engagement = (
+                    post.get('reply_count', 0) > 0 or
+                    post.get('like_count', 0) > 2 or
+                    post.get('retweet_count', 0) > 0
+                )
+            
+                if has_engagement:
+                    # Analyze the post content
+                    analysis = self.content_analyzer.analyze_post(post)
+                    post['content_analysis'] = analysis
+                
+                    # Check if it's a market-related post with sufficient reply score
+                    if analysis.get('reply_worthy', False):
+                        engaged_posts.append(post)
+        
+            return engaged_posts
+    
+        except Exception as e:
+            logger.log_error("Check Active Discussions", str(e))
+            return []    
 
     def start(self) -> None:
         """Main bot execution loop with multi-timeframe support and reply functionality"""
