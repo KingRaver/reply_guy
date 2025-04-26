@@ -22,8 +22,6 @@ import threading
 import queue
 import json
 from llm_provider import LLMProvider
-from warpcast_handler import WarpcastHandler
-from warpcast_integration import WarpcastIntegration
 
 from utils.logger import logger
 from utils.browser import browser
@@ -40,155 +38,123 @@ from content_analyzer import ContentAnalyzer
 
 class CryptoAnalysisBot:
     def __init__(self) -> None:
-        self.browser = browser
-        self.config = config
-        self.llm_provider = LLMProvider(self.config)  
-        self.past_predictions = []
-        self.meme_phrases = MEME_PHRASES
-        self.last_check_time = datetime.now()
-        self.last_market_data = {}
-        self.last_reply_time = strip_timezone(datetime.now())
+       self.browser = browser
+       self.config = config
+       self.llm_provider = LLMProvider(self.config)  
+       self.past_predictions = []
+       self.meme_phrases = MEME_PHRASES
+       self.last_check_time = datetime.now()
+       self.last_market_data = {}
+       self.last_reply_time = strip_timezone(datetime.now())
+       
+       # Multi-timeframe prediction tracking
+       self.timeframes = ["1h", "24h", "7d"]
+       self.timeframe_predictions = {tf: {} for tf in self.timeframes}
+       self.timeframe_last_post = {tf: datetime.now() - timedelta(hours=3) for tf in self.timeframes}
+       
+       # Timeframe posting frequency controls (in hours)
+       self.timeframe_posting_frequency = {
+           "1h": 1,    # Every hour
+           "24h": 6,   # Every 6 hours
+           "7d": 24    # Once per day
+       }
+       
+       # Prediction accuracy tracking by timeframe
+       self.prediction_accuracy = {tf: {'correct': 0, 'total': 0} for tf in self.timeframes}
+       
+       # Initialize prediction engine with database and LLM Provider
+       self.prediction_engine = PredictionEngine(
+           database=self.config.db,
+           llm_provider=self.llm_provider  # Pass provider instead of API key
+       )
+       
+       # Create a queue for predictions to process
+       self.prediction_queue = queue.Queue()
+       
+       # Initialize thread for async prediction generation
+       self.prediction_thread = None
+       self.prediction_thread_running = False
+       
+       # Initialize CoinGecko handler with 60s cache duration
+       self.coingecko = CoinGeckoHandler(
+           base_url=self.config.COINGECKO_BASE_URL,
+           cache_duration=60
+       )
 
-        # Warpcast integration
-        self.WARPCAST_ENABLED = os.getenv('WARPCAST_ENABLED', 'false').lower() == 'true'
-        self.WARPCAST_POST_PREDICTIONS = os.getenv('WARPCAST_POST_PREDICTIONS', 'true').lower() == 'true'
-        self.WARPCAST_POST_ANALYSES = os.getenv('WARPCAST_POST_ANALYSES', 'true').lower() == 'true'
-    
-        # Initialize as None first
-        self.warpcast = None
-    
-        # Then try to initialize if enabled
-        if hasattr(self.config, 'WARPCAST_ENABLED') and self.config.WARPCAST_ENABLED:
-            try:
-                # Import WarpcastIntegration only if needed
-                from warpcast_integration import WarpcastIntegration
-            
-                # Initialize Warpcast integration
-                self.warpcast = WarpcastIntegration(self.config, self.config.db)
-            
-                # Ensure database has Warpcast tables
-                self.config.db.add_warpcast_tables()
-            
-                logger.logger.info("Warpcast integration initialized successfully")
-            except Exception as e:
-                logger.log_error("Warpcast Initialization", str(e))
-                logger.logger.warning(f"Warpcast integration initialization failed: {str(e)}")
-                # Continue without Warpcast functionality
-        else:
-            logger.logger.info("Warpcast integration is disabled")
+       # Target chains to analyze
+       self.target_chains = {
+           'BTC': 'bitcoin',
+           'ETH': 'ethereum',
+           'SOL': 'solana',
+           'XRP': 'ripple',
+           'BNB': 'binancecoin',
+           'AVAX': 'avalanche-2',
+           'DOT': 'polkadot',
+           'UNI': 'uniswap',
+           'NEAR': 'near',
+           'AAVE': 'aave',
+           'FIL': 'filecoin',
+           'POL': 'matic-network',
+           'TRUMP': 'official-trump',
+           'KAITO': 'kaito'  # Kept in the list but not given special treatment
+       }
 
-        logger.log_startup()     
-    
-        # Multi-timeframe prediction tracking
-        self.timeframes = ["1h", "24h", "7d"]
-        self.timeframe_predictions = {tf: {} for tf in self.timeframes}
-        self.timeframe_last_post = {tf: datetime.now() - timedelta(hours=3) for tf in self.timeframes}
-    
-        # Timeframe posting frequency controls (in hours)
-        self.timeframe_posting_frequency = {
-            "1h": 1,    # Every hour
-            "24h": 6,   # Every 6 hours
-            "7d": 24    # Once per day
-        }
-    
-        # Prediction accuracy tracking by timeframe
-        self.prediction_accuracy = {tf: {'correct': 0, 'total': 0} for tf in self.timeframes}
-    
-        # Initialize prediction engine with database and LLM Provider
-        self.prediction_engine = PredictionEngine(
-            database=self.config.db,
-            llm_provider=self.llm_provider  # Pass provider instead of API key
-        )
-    
-        # Create a queue for predictions to process
-        self.prediction_queue = queue.Queue()
-    
-        # Initialize thread for async prediction generation
-        self.prediction_thread = None
-        self.prediction_thread_running = False
-    
-        # Initialize CoinGecko handler with 60s cache duration
-        self.coingecko = CoinGeckoHandler(
-            base_url=self.config.COINGECKO_BASE_URL,
-            cache_duration=60
-        )
-
-        # Target chains to analyze
-        self.target_chains = {
-            'BTC': 'bitcoin',
-            'ETH': 'ethereum',
-            'SOL': 'solana',
-            'XRP': 'ripple',
-            'BNB': 'binancecoin',
-            'AVAX': 'avalanche-2',
-            'DOT': 'polkadot',
-            'UNI': 'uniswap',
-            'NEAR': 'near',
-            'AAVE': 'aave',
-            'FIL': 'filecoin',
-            'POL': 'matic-network',
-            'KAITO': 'kaito'  # Kept in the list but not given special treatment
-        }
-
-        # All tokens for reference and comparison
-        self.reference_tokens = list(self.target_chains.keys())
-    
-        # Chain name mapping for display
-        self.chain_name_mapping = self.target_chains.copy()
-    
-        self.CORRELATION_THRESHOLD = 0.75  
-        self.VOLUME_THRESHOLD = 0.60  
-        self.TIME_WINDOW = 24
-    
-        # Smart money thresholds
-        self.SMART_MONEY_VOLUME_THRESHOLD = 1.5  # 50% above average
-        self.SMART_MONEY_ZSCORE_THRESHOLD = 2.0  # 2 standard deviations
-    
-        # Timeframe-specific triggers and thresholds
-        self.timeframe_thresholds = {
-            "1h": {
-                "price_change": 3.0,    # 3% price change for 1h predictions
-                "volume_change": 8.0,   # 8% volume change
-                "confidence": 70,       # Minimum confidence percentage
-                "fomo_factor": 1.0      # FOMO enhancement factor
-            },
-            "24h": {
-                "price_change": 5.0,    # 5% price change for 24h predictions
-                "volume_change": 12.0,  # 12% volume change
-                "confidence": 65,       # Slightly lower confidence for longer timeframe
-                "fomo_factor": 1.2      # Higher FOMO factor
-            },
-            "7d": {
-                "price_change": 8.0,    # 8% price change for 7d predictions
-                "volume_change": 15.0,  # 15% volume change
-                "confidence": 60,       # Even lower confidence for weekly predictions
-                "fomo_factor": 1.5      # Highest FOMO factor
-            }
-        }
-    
-        # Initialize scheduled timeframe posts
-        self.next_scheduled_posts = {
-            "1h": datetime.now() + timedelta(minutes=random.randint(10, 30)),
-            "24h": datetime.now() + timedelta(hours=random.randint(1, 3)),
-            "7d": datetime.now() + timedelta(hours=random.randint(4, 8))
-        }
-    
-        # Initialize reply functionality components
-        self.timeline_scraper = TimelineScraper(self.browser, self.config, self.config.db)
-        self.reply_handler = ReplyHandler(self.browser, self.config, self.llm_provider, self.coingecko, self.config.db)
-        self.content_analyzer = ContentAnalyzer(self.config, self.config.db)
-    
-        # Reply tracking and control
-        self.last_reply_check = datetime.now() - timedelta(minutes=30)  # Start checking soon
-        self.reply_check_interval = 5  # Check for posts to reply to every 60 minutes
-        self.max_replies_per_cycle = 10  # Maximum 10 replies per cycle
-        self.reply_cooldown = 5  # Minutes between reply cycles
-        self.last_reply_time = datetime.now() - timedelta(minutes=self.reply_cooldown)  # Allow immediate first run
-    
-        # Initialize Warpcast integration
-        self.warpcast = WarpcastIntegration(self.config, self.config.db)
-    
-        logger.log_startup()
+       # All tokens for reference and comparison
+       self.reference_tokens = list(self.target_chains.keys())
+       
+       # Chain name mapping for display
+       self.chain_name_mapping = self.target_chains.copy()
+       
+       self.CORRELATION_THRESHOLD = 0.75  
+       self.VOLUME_THRESHOLD = 0.60  
+       self.TIME_WINDOW = 24
+       
+       # Smart money thresholds
+       self.SMART_MONEY_VOLUME_THRESHOLD = 1.5  # 50% above average
+       self.SMART_MONEY_ZSCORE_THRESHOLD = 2.0  # 2 standard deviations
+       
+       # Timeframe-specific triggers and thresholds
+       self.timeframe_thresholds = {
+           "1h": {
+               "price_change": 3.0,    # 3% price change for 1h predictions
+               "volume_change": 8.0,   # 8% volume change
+               "confidence": 70,       # Minimum confidence percentage
+               "fomo_factor": 1.0      # FOMO enhancement factor
+           },
+           "24h": {
+               "price_change": 5.0,    # 5% price change for 24h predictions
+               "volume_change": 12.0,  # 12% volume change
+               "confidence": 65,       # Slightly lower confidence for longer timeframe
+               "fomo_factor": 1.2      # Higher FOMO factor
+           },
+           "7d": {
+               "price_change": 8.0,    # 8% price change for 7d predictions
+               "volume_change": 15.0,  # 15% volume change
+               "confidence": 60,       # Even lower confidence for weekly predictions
+               "fomo_factor": 1.5      # Highest FOMO factor
+           }
+       }
+       
+       # Initialize scheduled timeframe posts
+       self.next_scheduled_posts = {
+           "1h": datetime.now() + timedelta(minutes=random.randint(10, 30)),
+           "24h": datetime.now() + timedelta(hours=random.randint(1, 3)),
+           "7d": datetime.now() + timedelta(hours=random.randint(4, 8))
+       }
+       
+       # Initialize reply functionality components
+       self.timeline_scraper = TimelineScraper(self.browser, self.config, self.config.db)
+       self.reply_handler = ReplyHandler(self.browser, self.config, self.llm_provider, self.coingecko, self.config.db)
+       self.content_analyzer = ContentAnalyzer(self.config, self.config.db)
+       
+       # Reply tracking and control
+       self.last_reply_check = datetime.now() - timedelta(minutes=30)  # Start checking soon
+       self.reply_check_interval = 60  # Check for posts to reply to every 60 minutes
+       self.max_replies_per_cycle = 10  # Maximum 10 replies per cycle
+       self.reply_cooldown = 20  # Minutes between reply cycles
+       self.last_reply_time = datetime.now() - timedelta(minutes=self.reply_cooldown)  # Allow immediate first run
+       
+       logger.log_startup()
 
     @ensure_naive_datetimes
     def _check_for_reply_opportunities(self, market_data: Dict[str, Any]) -> bool:
@@ -199,13 +165,13 @@ class CryptoAnalysisBot:
         now = strip_timezone(datetime.now())
 
         # Check if it's time to look for posts to reply to
-        time_since_last_check = safe_datetime_diff(now, self.last_reply_check) / 60
+        time_since_last_check = safe_datetime_diff(now, self.last_reply_check) / 300
         if time_since_last_check < self.reply_check_interval:
             logger.logger.debug(f"Skipping reply check, {time_since_last_check:.1f} minutes since last check (interval: {self.reply_check_interval})")
             return False
     
         # Also check cooldown period
-        time_since_last_reply = safe_datetime_diff(now, self.last_reply_time) / 60
+        time_since_last_reply = safe_datetime_diff(now, self.last_reply_time) / 300
         if time_since_last_reply < self.reply_cooldown:
             logger.logger.debug(f"In reply cooldown period, {time_since_last_reply:.1f} minutes since last reply (cooldown: {self.reply_cooldown})")
             return False
@@ -582,217 +548,152 @@ class CryptoAnalysisBot:
            logger.logger.debug(f"Queued {timeframe} prediction for {token}")
 
     def _post_analysis(self, tweet_text: str, timeframe: str = "1h") -> bool:
+       """
+       Post analysis to Twitter with robust button handling
+       Tracks post by timeframe
+       """
+       max_retries = 3
+       retry_count = 0
+       
+       while retry_count < max_retries:
+           try:
+               self.browser.driver.get('https://twitter.com/compose/tweet')
+               time.sleep(3)
+               
+               text_area = WebDriverWait(self.browser.driver, 10).until(
+                   EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweetTextarea_0"]'))
+               )
+               text_area.click()
+               time.sleep(1)
+               
+               # Ensure tweet text only contains BMP characters
+               safe_tweet_text = ''.join(char for char in tweet_text if ord(char) < 0x10000)
+               
+               # Simply send the tweet text directly - no handling of hashtags needed
+               text_area.send_keys(safe_tweet_text)
+               time.sleep(2)
+
+               post_button = None
+               button_locators = [
+                   (By.CSS_SELECTOR, '[data-testid="tweetButton"]'),
+                   (By.XPATH, "//div[@role='button'][contains(., 'Post')]"),
+                   (By.XPATH, "//span[text()='Post']")
+               ]
+
+               for locator in button_locators:
+                   try:
+                       post_button = WebDriverWait(self.browser.driver, 5).until(
+                           EC.element_to_be_clickable(locator)
+                       )
+                       if post_button:
+                           break
+                   except:
+                       continue
+
+               if post_button:
+                   self.browser.driver.execute_script("arguments[0].scrollIntoView(true);", post_button)
+                   time.sleep(1)
+                   self.browser.driver.execute_script("arguments[0].click();", post_button)
+                   time.sleep(5)
+                   
+                   # Update last post time for this timeframe
+                   self.timeframe_last_post[timeframe] = datetime.now()
+                   
+                   # Update next scheduled post time
+                   hours_to_add = self.timeframe_posting_frequency.get(timeframe, 1)
+                   # Add some randomness to prevent predictable patterns
+                   jitter = random.uniform(0.8, 1.2)
+                   self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=hours_to_add * jitter)
+                   
+                   logger.logger.info(f"{timeframe} tweet posted successfully")
+                   logger.logger.debug(f"Next {timeframe} post scheduled for {self.next_scheduled_posts[timeframe]}")
+                   return True
+               else:
+                   logger.logger.error(f"Could not find post button for {timeframe} tweet")
+                   retry_count += 1
+                   time.sleep(2)
+                   
+           except Exception as e:
+               logger.logger.error(f"{timeframe} tweet posting error, attempt {retry_count + 1}: {str(e)}")
+               retry_count += 1
+               wait_time = retry_count * 10
+               logger.logger.warning(f"Waiting {wait_time}s before retry...")
+               time.sleep(wait_time)
+               continue
+       
+       logger.log_error(f"Tweet Creation - {timeframe}", "Maximum retries reached")
+       return False
+   
+    def _get_last_posts(self, count: int = 10) -> List[Dict[str, Any]]:
         """
-        Post analysis to Twitter with robust button handling
-        Supports posting to Warpcast if enabled
-        Tracks post by timeframe
+        Get last N posts from timeline with timeframe detection
+        Returns list of post information including detected timeframe
         """
         max_retries = 3
         retry_count = 0
-        twitter_success = False
-        warpcast_success = False
     
         while retry_count < max_retries:
             try:
-                # Post to Twitter
-                self.browser.driver.get('https://twitter.com/compose/tweet')
+                self.browser.driver.get(f'https://twitter.com/{self.config.TWITTER_USERNAME}')
                 time.sleep(3)
             
-                text_area = WebDriverWait(self.browser.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweetTextarea_0"]'))
+                # Use explicit waits to ensure elements are loaded
+                WebDriverWait(self.browser.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweetText"]'))
                 )
-                text_area.click()
-                time.sleep(1)
             
-                # Ensure tweet text only contains BMP characters
-                safe_tweet_text = ''.join(char for char in tweet_text if ord(char) < 0x10000)
+                posts = self.browser.driver.find_elements(By.CSS_SELECTOR, '[data-testid="tweetText"]')
             
-                # Simply send the tweet text directly - no handling of hashtags needed
-                text_area.send_keys(safe_tweet_text)
-                time.sleep(2)
-
-                post_button = None
-                button_locators = [
-                    (By.CSS_SELECTOR, '[data-testid="tweetButton"]'),
-                    (By.XPATH, "//div[@role='button'][contains(., 'Post')]"),
-                    (By.XPATH, "//span[text()='Post']")
-                ]
-
-                for locator in button_locators:
+                # Use an explicit wait for timestamps too
+                WebDriverWait(self.browser.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'time'))
+                )
+            
+                timestamps = self.browser.driver.find_elements(By.CSS_SELECTOR, 'time')
+            
+                # Get only the first count posts
+                posts = posts[:count]
+                timestamps = timestamps[:count]
+            
+                result = []
+                for i in range(min(len(posts), len(timestamps))):
                     try:
-                        post_button = WebDriverWait(self.browser.driver, 5).until(
-                            EC.element_to_be_clickable(locator)
-                        )
-                        if post_button:
-                            break
-                    except:
+                        post_text = posts[i].text
+                        timestamp_str = timestamps[i].get_attribute('datetime') if timestamps[i].get_attribute('datetime') else None
+                    
+                        # Detect timeframe from post content
+                        detected_timeframe = "1h"  # Default
+                    
+                        # Look for timeframe indicators in the post
+                        if "7D PREDICTION" in post_text.upper() or "7-DAY" in post_text.upper() or "WEEKLY" in post_text.upper():
+                            detected_timeframe = "7d"
+                        elif "24H PREDICTION" in post_text.upper() or "24-HOUR" in post_text.upper() or "DAILY" in post_text.upper():
+                            detected_timeframe = "24h"
+                        elif "1H PREDICTION" in post_text.upper() or "1-HOUR" in post_text.upper() or "HOURLY" in post_text.upper():
+                            detected_timeframe = "1h"
+                    
+                        post_info = {
+                            'text': post_text,
+                            'timestamp': datetime.fromisoformat(timestamp_str) if timestamp_str else None,
+                            'timeframe': detected_timeframe
+                        }
+                    
+                        result.append(post_info)
+                    except Exception as element_error:
+                        # Skip this element if it's stale or otherwise problematic
+                        logger.logger.debug(f"Element error while extracting post {i}: {str(element_error)}")
                         continue
-
-                if post_button:
-                    self.browser.driver.execute_script("arguments[0].scrollIntoView(true);", post_button)
-                    time.sleep(1)
-                    self.browser.driver.execute_script("arguments[0].click();", post_button)
-                    time.sleep(5)
-                
-                    # Update last post time for this timeframe
-                    self.timeframe_last_post[timeframe] = datetime.now()
-                
-                    # Update next scheduled post time
-                    hours_to_add = self.timeframe_posting_frequency.get(timeframe, 1)
-                    # Add some randomness to prevent predictable patterns
-                    jitter = random.uniform(0.8, 1.2)
-                    self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=hours_to_add * jitter)
-                
-                    logger.logger.info(f"{timeframe} tweet posted successfully to Twitter")
-                    logger.logger.debug(f"Next {timeframe} post scheduled for {self.next_scheduled_posts[timeframe]}")
-                    twitter_success = True
-                
-                    # Now try posting to Warpcast if enabled
-                    if hasattr(self, 'warpcast') and hasattr(self.config, 'WARPCAST_ENABLED') and self.config.WARPCAST_ENABLED:
-                        try:
-                            # Extract token name from tweet text
-                            token_match = re.search(r'#([A-Z]+)', tweet_text)
-                            token = token_match.group(1) if token_match else None
-                    
-                            if token and token in self.reference_tokens:
-                                # If it's a token-specific analysis
-                                warpcast_success = self.warpcast.post_analysis(
-                                    token=token,
-                                    analysis=tweet_text,
-                                    market_data=self.last_market_data if self.last_market_data else {},
-                                    timeframe=timeframe
-                                )
-                            else:
-                                # Generic analysis or correlation matrix
-                                if "CORRELATION MATRIX" in tweet_text:
-                                    warpcast_success = self.warpcast.post_correlation_matrix(
-                                        correlation_report=tweet_text,
-                                        timeframe=timeframe
-                                    )
-                                else:
-                                    warpcast_success = self.warpcast.post_content(
-                                        content=tweet_text,
-                                        trigger_type=f"analysis_{timeframe}",
-                                        is_prediction=False,
-                                        timeframe=timeframe
-                                    )
-                    
-                            if warpcast_success:
-                                logger.logger.info(f"{timeframe} analysis posted successfully to Warpcast")
-                            else:
-                                logger.logger.warning(f"Failed to post {timeframe} analysis to Warpcast")
-                        except Exception as warp_e:
-                            logger.logger.error(f"Warpcast posting error: {str(warp_e)}")
-                            logger.log_error("Warpcast Posting", str(warp_e))
-                            warpcast_success = False
-                
-                    # Return success if at least one platform succeeded
-                    return twitter_success or warpcast_success
-                else:
-                    logger.logger.error(f"Could not find post button for {timeframe} tweet")
-                    retry_count += 1
-                    time.sleep(2)
-                
-            except Exception as e:
-                logger.logger.error(f"{timeframe} tweet posting error, attempt {retry_count + 1}: {str(e)}")
-                retry_count += 1
-                wait_time = retry_count * 10
-                logger.logger.warning(f"Waiting {wait_time}s before retry...")
-                time.sleep(wait_time)
-                continue
-    
-        # If Twitter posting failed after all retries, attempt Warpcast-only posting if enabled
-        if (not twitter_success and hasattr(self, 'warpcast') and 
-                hasattr(self.config, 'WARPCAST_ENABLED') and self.config.WARPCAST_ENABLED):
-            try:
-                logger.logger.info(f"Twitter posting failed, attempting Warpcast-only posting for {timeframe} analysis")
             
-                # Extract token name from tweet text
-                token_match = re.search(r'#([A-Z]+)', tweet_text)
-                token = token_match.group(1) if token_match else None
-        
-                if token and token in self.reference_tokens:
-                    # If it's a token-specific analysis
-                    warpcast_success = self.warpcast.post_analysis(
-                        token=token,
-                        analysis=tweet_text,
-                        market_data=self.last_market_data if self.last_market_data else {},
-                        timeframe=timeframe
-                    )
-                else:
-                    # Generic analysis or correlation matrix
-                    if "CORRELATION MATRIX" in tweet_text:
-                        warpcast_success = self.warpcast.post_correlation_matrix(
-                            correlation_report=tweet_text,
-                            timeframe=timeframe
-                        )
-                    else:
-                        warpcast_success = self.warpcast.post_content(
-                            content=tweet_text,
-                            trigger_type=f"analysis_{timeframe}",
-                            is_prediction=False,
-                            timeframe=timeframe
-                        )
-        
-                if warpcast_success:
-                    logger.logger.info(f"{timeframe} analysis posted successfully to Warpcast (Twitter failed)")
-                    return True
-                else:
-                    logger.logger.warning(f"Failed to post {timeframe} analysis to Warpcast (after Twitter failed)")
-            except Exception as warp_e:
-                logger.logger.error(f"Warpcast fallback posting error: {str(warp_e)}")
-                logger.log_error("Warpcast Fallback Posting", str(warp_e))
-    
-        logger.log_error(f"Post Analysis - {timeframe}", "Maximum retries reached for all platforms")
-        return False
-   
-    def _get_last_posts(self, count: int = 10) -> List[Dict[str, Any]]:
-       """
-       Get last N posts from timeline with timeframe detection
-       Returns list of post information including detected timeframe
-       """
-       try:
-           self.browser.driver.get(f'https://twitter.com/{self.config.TWITTER_USERNAME}')
-           time.sleep(3)
-           
-           posts = WebDriverWait(self.browser.driver, 10).until(
-               EC.presence_of_all_elements_located((By.CSS_SELECTOR, '[data-testid="tweetText"]'))
-           )
-           
-           timestamps = self.browser.driver.find_elements(By.CSS_SELECTOR, 'time')
-           
-           # Get only the first count posts
-           posts = posts[:count]
-           timestamps = timestamps[:count]
-           
-           result = []
-           for i in range(min(len(posts), len(timestamps))):
-               post_text = posts[i].text
-               timestamp_str = timestamps[i].get_attribute('datetime') if timestamps[i].get_attribute('datetime') else None
-               
-               # Detect timeframe from post content
-               detected_timeframe = "1h"  # Default
-               
-               # Look for timeframe indicators in the post
-               if "7D PREDICTION" in post_text.upper() or "7-DAY" in post_text.upper() or "WEEKLY" in post_text.upper():
-                   detected_timeframe = "7d"
-               elif "24H PREDICTION" in post_text.upper() or "24-HOUR" in post_text.upper() or "DAILY" in post_text.upper():
-                   detected_timeframe = "24h"
-               elif "1H PREDICTION" in post_text.upper() or "1-HOUR" in post_text.upper() or "HOURLY" in post_text.upper():
-                   detected_timeframe = "1h"
-               
-               post_info = {
-                   'text': post_text,
-                   'timestamp': datetime.fromisoformat(timestamp_str) if timestamp_str else None,
-                   'timeframe': detected_timeframe
-               }
-               
-               result.append(post_info)
-           
-           return result
-       except Exception as e:
-           logger.log_error("Get Last Posts", str(e))
-           return []
+                return result
+            
+            except Exception as e:
+                retry_count += 1
+                logger.logger.warning(f"Error getting last posts (attempt {retry_count}/{max_retries}): {str(e)}")
+                time.sleep(2)  # Add a small delay before retry
+            
+        # If all retries failed, log the error and return an empty list
+        logger.log_error("Get Last Posts", f"Maximum retries ({max_retries}) reached")
+        return []
 
     def _get_last_posts_by_timeframe(self, timeframe: str = "1h", count: int = 5) -> List[str]:
        """
@@ -845,12 +746,12 @@ class CryptoAnalysisBot:
    
     def _post_prediction_for_timeframe(self, token: str, market_data: Dict[str, Any], timeframe: str) -> bool:
         """
-        Post a prediction for a specific timeframe to Twitter and Warpcast
+        Post a prediction for a specific timeframe
         """
         try:
             # Check if we have a prediction
             prediction = self.timeframe_predictions.get(timeframe, {}).get(token)
-
+        
             # If no prediction exists, generate one
             if not prediction:
                 prediction = self.prediction_engine.generate_prediction(
@@ -858,53 +759,30 @@ class CryptoAnalysisBot:
                     market_data=market_data,
                     timeframe=timeframe
                 )
-        
+            
                 # Store for future use
                 if timeframe not in self.timeframe_predictions:
                     self.timeframe_predictions[timeframe] = {}
                 self.timeframe_predictions[timeframe][token] = prediction
-
+        
             # Format the prediction for posting
             tweet_text = self._format_prediction_tweet(token, prediction, market_data, timeframe)
-
+        
             # Check for duplicates - make sure we're handling datetime properly
             last_posts = self._get_last_posts_by_timeframe(timeframe=timeframe)
-
+        
             # Ensure datetime compatibility in duplicate check
             if self._is_duplicate_analysis(tweet_text, last_posts, timeframe):
                 logger.logger.warning(f"Skipping duplicate {timeframe} prediction for {token}")
                 return False
-        
-            # Post to Twitter
-            twitter_success = self._post_analysis(tweet_text, timeframe)
-        
-            # Post to Warpcast if enabled (regardless of Twitter success)
-            warpcast_success = False
-            if hasattr(self, 'warpcast') and hasattr(self.config, 'WARPCAST_ENABLED') and self.config.WARPCAST_ENABLED:
-                try:
-                    warpcast_success = self.warpcast.post_prediction(
-                        token=token,
-                        prediction=prediction,
-                        market_data=market_data,
-                        timeframe=timeframe
-                    )
             
-                    if warpcast_success:
-                        logger.logger.info(f"Successfully posted {timeframe} prediction for {token} to Warpcast")
-                    else:
-                        logger.logger.warning(f"Failed to post {timeframe} prediction for {token} to Warpcast")
-                except Exception as warp_e:
-                    logger.logger.error(f"Warpcast prediction posting error: {str(warp_e)}")
-                    logger.log_error(f"Warpcast Prediction Posting - {token} ({timeframe})", str(warp_e))
-                    warpcast_success = False
-        
-            # Store in database if either platform succeeds
-            if twitter_success or warpcast_success:
+            # Post the prediction
+            if self._post_analysis(tweet_text, timeframe):
                 # Store in database
                 sentiment = prediction.get("sentiment", "NEUTRAL")
                 price_data = {token: {'price': market_data[token]['current_price'], 
                                     'volume': market_data[token]['volume']}}
-        
+            
                 # Create storage data
                 storage_data = {
                     'content': tweet_text,
@@ -914,24 +792,22 @@ class CryptoAnalysisBot:
                     'meme_phrases': {token: ""},  # No meme phrases for predictions
                     'is_prediction': True,
                     'prediction_data': prediction,
-                    'timeframe': timeframe,
-                    'warpcast_posted': warpcast_success,
-                    'twitter_posted': twitter_success
+                    'timeframe': timeframe
                 }
-        
+            
                 # Store in database
                 self.config.db.store_posted_content(**storage_data)
-        
+            
                 # Update last post time for this timeframe with current datetime
                 # This is important - make sure we're storing a datetime object
                 self.timeframe_last_post[timeframe] = datetime.now()
-        
-                logger.logger.info(f"Successfully posted {timeframe} prediction for {token} to at least one platform")
+            
+                logger.logger.info(f"Successfully posted {timeframe} prediction for {token}")
                 return True
             else:
-                logger.logger.error(f"Failed to post {timeframe} prediction for {token} to any platform")
+                logger.logger.error(f"Failed to post {timeframe} prediction for {token}")
                 return False
-        
+            
         except Exception as e:
             logger.log_error(f"Post Prediction For Timeframe - {token} ({timeframe})", str(e))
             return False
@@ -1159,13 +1035,13 @@ class CryptoAnalysisBot:
         now = datetime.now()
     
         # Check if it's time to look for posts to reply to
-        time_since_last_check = (now - self.last_reply_check).total_seconds() / 60
+        time_since_last_check = (now - self.last_reply_check).total_seconds() / 300
         if time_since_last_check < self.reply_check_interval:
             logger.logger.debug(f"Skipping reply check, {time_since_last_check:.1f} minutes since last check (interval: {self.reply_check_interval})")
             return False
         
         # Also check cooldown period
-        time_since_last_reply = (now - self.last_reply_time).total_seconds() / 60
+        time_since_last_reply = (now - self.last_reply_time).total_seconds() / 300
         if time_since_last_reply < self.reply_cooldown:
             logger.logger.debug(f"In reply cooldown period, {time_since_last_reply:.1f} minutes since last reply (cooldown: {self.reply_cooldown})")
             return False
@@ -1224,59 +1100,49 @@ class CryptoAnalysisBot:
             return False
 
     def _cleanup(self) -> None:
-        """Cleanup resources and save state"""
-        try:
-            # Stop prediction thread if running
-            if self.prediction_thread_running:
-                self.prediction_thread_running = False
-                if self.prediction_thread and self.prediction_thread.is_alive():
-                    self.prediction_thread.join(timeout=5)
-                logger.logger.info("Stopped prediction thread")
-        
-            # Close browser
-            if self.browser:
-                logger.logger.info("Closing browser...")
-                try:
-                    self.browser.close_browser()
-                    time.sleep(1)
-                except Exception as e:
-                    logger.logger.warning(f"Error during browser close: {str(e)}")
-        
-            # Save timeframe prediction data to database for persistence
-            try:
-                timeframe_state = {
-                    "predictions": self.timeframe_predictions,
-                    "last_post": {tf: ts.isoformat() for tf, ts in self.timeframe_last_post.items()},
-                    "next_scheduled": {tf: ts.isoformat() for tf, ts in self.next_scheduled_posts.items()},
-                    "accuracy": self.prediction_accuracy
-                }
-            
-                # Store using the generic JSON data storage
-                self.config.db._store_json_data(
-                    data_type="timeframe_state",
-                    data=timeframe_state
-                )
-                logger.logger.info("Saved timeframe state to database")
-            except Exception as e:
-                logger.logger.warning(f"Failed to save timeframe state: {str(e)}")
-        
-            # Clean up Warpcast resources if initialized
-            if hasattr(self, 'warpcast') and self.warpcast:
-                try:
-                    logger.logger.info("Closing Warpcast resources...")
-                    # Currently the WarpcastIntegration doesn't have a cleanup method
-                    # But we can add one if needed in the future
-                    # self.warpcast.cleanup()
-                except Exception as e:
-                    logger.logger.warning(f"Error during Warpcast cleanup: {str(e)}")
-        
-            # Close database connection
-            if self.config:
-                self.config.cleanup()
-            
-            logger.log_shutdown()
-        except Exception as e:
-            logger.log_error("Cleanup", str(e))
+       """Cleanup resources and save state"""
+       try:
+           # Stop prediction thread if running
+           if self.prediction_thread_running:
+               self.prediction_thread_running = False
+               if self.prediction_thread and self.prediction_thread.is_alive():
+                   self.prediction_thread.join(timeout=5)
+               logger.logger.info("Stopped prediction thread")
+           
+           # Close browser
+           if self.browser:
+               logger.logger.info("Closing browser...")
+               try:
+                   self.browser.close_browser()
+                   time.sleep(1)
+               except Exception as e:
+                   logger.logger.warning(f"Error during browser close: {str(e)}")
+           
+           # Save timeframe prediction data to database for persistence
+           try:
+               timeframe_state = {
+                   "predictions": self.timeframe_predictions,
+                   "last_post": {tf: ts.isoformat() for tf, ts in self.timeframe_last_post.items()},
+                   "next_scheduled": {tf: ts.isoformat() for tf, ts in self.next_scheduled_posts.items()},
+                   "accuracy": self.prediction_accuracy
+               }
+               
+               # Store using the generic JSON data storage
+               self.config.db._store_json_data(
+                   data_type="timeframe_state",
+                   data=timeframe_state
+               )
+               logger.logger.info("Saved timeframe state to database")
+           except Exception as e:
+               logger.logger.warning(f"Failed to save timeframe state: {str(e)}")
+           
+           # Close database connection
+           if self.config:
+               self.config.cleanup()
+               
+           logger.log_shutdown()
+       except Exception as e:
+           logger.log_error("Cleanup", str(e))
 
     def _ensure_datetime(self, value):
         """Convert value to datetime if it's a string"""
