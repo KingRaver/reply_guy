@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from typing import Dict, Optional, Any, Union, List, Tuple
+from typing import Dict, List, Optional, Any, Union, Tuple
 import sys
 import os
 import time
@@ -31,147 +31,162 @@ from mood_config import MoodIndicators, determine_advanced_mood, Mood, MemePhras
 from meme_phrases import MEME_PHRASES
 from prediction_engine import PredictionEngine
 
-# Import new modules for reply functionality
+# Import modules for reply functionality
 from timeline_scraper import TimelineScraper
 from reply_handler import ReplyHandler
 from content_analyzer import ContentAnalyzer
 
 class CryptoAnalysisBot:
+    """
+    Enhanced crypto analysis bot with market and tech content capabilities.
+    Handles market analysis, predictions, and social media engagement.
+    """
+    
     def __init__(self) -> None:
-       self.browser = browser
-       self.config = config
-       self.llm_provider = LLMProvider(self.config)  
-       self.past_predictions = []
-       self.meme_phrases = MEME_PHRASES
-       self.last_check_time = datetime.now()
-       self.last_market_data = {}
-       self.last_reply_time = strip_timezone(datetime.now())
+        """
+        Initialize the crypto analysis bot with improved configuration and tracking.
+        Sets up connections to browser, database, and API services.
+        """
+        self.browser = browser
+        self.config = config
+        self.llm_provider = LLMProvider(self.config)  
+        self.past_predictions = []
+        self.meme_phrases = MEME_PHRASES
+        self.last_check_time = strip_timezone(datetime.now())
+        self.last_market_data = {}
+        self.last_reply_time = strip_timezone(datetime.now())
        
-       # Multi-timeframe prediction tracking
-       self.timeframes = ["1h", "24h", "7d"]
-       self.timeframe_predictions = {tf: {} for tf in self.timeframes}
-       self.timeframe_last_post = {tf: datetime.now() - timedelta(hours=3) for tf in self.timeframes}
+        # Multi-timeframe prediction tracking
+        self.timeframes = ["1h", "24h", "7d"]
+        self.timeframe_predictions = {tf: {} for tf in self.timeframes}
+        self.timeframe_last_post = {tf: strip_timezone(datetime.now() - timedelta(hours=3)) for tf in self.timeframes}
        
-       # Timeframe posting frequency controls (in hours)
-       self.timeframe_posting_frequency = {
-           "1h": 1,    # Every hour
-           "24h": 6,   # Every 6 hours
-           "7d": 24    # Once per day
-       }
+        # Timeframe posting frequency controls (in hours)
+        self.timeframe_posting_frequency = {
+            "1h": 1,    # Every hour
+            "24h": 6,   # Every 6 hours
+            "7d": 24    # Once per day
+        }
        
-       # Prediction accuracy tracking by timeframe
-       self.prediction_accuracy = {tf: {'correct': 0, 'total': 0} for tf in self.timeframes}
+        # Prediction accuracy tracking by timeframe
+        self.prediction_accuracy = {tf: {'correct': 0, 'total': 0} for tf in self.timeframes}
        
-       # Initialize prediction engine with database and LLM Provider
-       self.prediction_engine = PredictionEngine(
-           database=self.config.db,
-           llm_provider=self.llm_provider  # Pass provider instead of API key
-       )
+        # Initialize prediction engine with database and LLM Provider
+        self.prediction_engine = PredictionEngine(
+            database=self.config.db,
+            llm_provider=self.llm_provider
+        )
        
-       # Create a queue for predictions to process
-       self.prediction_queue = queue.Queue()
+        # Create a queue for predictions to process
+        self.prediction_queue = queue.Queue()
        
-       # Initialize thread for async prediction generation
-       self.prediction_thread = None
-       self.prediction_thread_running = False
+        # Initialize thread for async prediction generation
+        self.prediction_thread = None
+        self.prediction_thread_running = False
        
-       # Initialize CoinGecko handler with 60s cache duration
-       self.coingecko = CoinGeckoHandler(
-           base_url=self.config.COINGECKO_BASE_URL,
-           cache_duration=60
-       )
+        # Initialize CoinGecko handler with 60s cache duration
+        self.coingecko = CoinGeckoHandler(
+            base_url=self.config.COINGECKO_BASE_URL,
+            cache_duration=60
+        )
 
-       # Target chains to analyze
-       self.target_chains = {
-           'BTC': 'bitcoin',
-           'ETH': 'ethereum',
-           'SOL': 'solana',
-           'XRP': 'ripple',
-           'BNB': 'binancecoin',
-           'AVAX': 'avalanche-2',
-           'DOT': 'polkadot',
-           'UNI': 'uniswap',
-           'NEAR': 'near',
-           'AAVE': 'aave',
-           'FIL': 'filecoin',
-           'POL': 'matic-network',
-           'TRUMP': 'official-trump',
-           'KAITO': 'kaito'  # Kept in the list but not given special treatment
-       }
+        # Target chains to analyze
+        self.target_chains = {
+            'BTC': 'bitcoin',
+            'ETH': 'ethereum',
+            'SOL': 'solana',
+            'XRP': 'ripple',
+            'BNB': 'binancecoin',
+            'AVAX': 'avalanche-2',
+            'DOT': 'polkadot',
+            'UNI': 'uniswap',
+            'NEAR': 'near',
+            'AAVE': 'aave',
+            'FIL': 'filecoin',
+            'POL': 'matic-network',
+            'TRUMP': 'official-trump',
+            'KAITO': 'kaito'
+        }
 
-       # All tokens for reference and comparison
-       self.reference_tokens = list(self.target_chains.keys())
+        # All tokens for reference and comparison
+        self.reference_tokens = list(self.target_chains.keys())
        
-       # Chain name mapping for display
-       self.chain_name_mapping = self.target_chains.copy()
+        # Chain name mapping for display
+        self.chain_name_mapping = self.target_chains.copy()
        
-       self.CORRELATION_THRESHOLD = 0.75  
-       self.VOLUME_THRESHOLD = 0.60  
-       self.TIME_WINDOW = 24
+        self.CORRELATION_THRESHOLD = 0.75  
+        self.VOLUME_THRESHOLD = 0.60  
+        self.TIME_WINDOW = 24
        
-       # Smart money thresholds
-       self.SMART_MONEY_VOLUME_THRESHOLD = 1.5  # 50% above average
-       self.SMART_MONEY_ZSCORE_THRESHOLD = 2.0  # 2 standard deviations
+        # Smart money thresholds
+        self.SMART_MONEY_VOLUME_THRESHOLD = 1.5  # 50% above average
+        self.SMART_MONEY_ZSCORE_THRESHOLD = 2.0  # 2 standard deviations
        
-       # Timeframe-specific triggers and thresholds
-       self.timeframe_thresholds = {
-           "1h": {
-               "price_change": 3.0,    # 3% price change for 1h predictions
-               "volume_change": 8.0,   # 8% volume change
-               "confidence": 70,       # Minimum confidence percentage
-               "fomo_factor": 1.0      # FOMO enhancement factor
-           },
-           "24h": {
-               "price_change": 5.0,    # 5% price change for 24h predictions
-               "volume_change": 12.0,  # 12% volume change
-               "confidence": 65,       # Slightly lower confidence for longer timeframe
-               "fomo_factor": 1.2      # Higher FOMO factor
-           },
-           "7d": {
-               "price_change": 8.0,    # 8% price change for 7d predictions
-               "volume_change": 15.0,  # 15% volume change
-               "confidence": 60,       # Even lower confidence for weekly predictions
-               "fomo_factor": 1.5      # Highest FOMO factor
-           }
-       }
+        # Timeframe-specific triggers and thresholds
+        self.timeframe_thresholds = {
+            "1h": {
+                "price_change": 3.0,    # 3% price change for 1h predictions
+                "volume_change": 8.0,   # 8% volume change
+                "confidence": 70,       # Minimum confidence percentage
+                "fomo_factor": 1.0      # FOMO enhancement factor
+            },
+            "24h": {
+                "price_change": 5.0,    # 5% price change for 24h predictions
+                "volume_change": 12.0,  # 12% volume change
+                "confidence": 65,       # Slightly lower confidence for longer timeframe
+                "fomo_factor": 1.2      # Higher FOMO factor
+            },
+            "7d": {
+                "price_change": 8.0,    # 8% price change for 7d predictions
+                "volume_change": 15.0,  # 15% volume change
+                "confidence": 60,       # Even lower confidence for weekly predictions
+                "fomo_factor": 1.5      # Highest FOMO factor
+            }
+        }
        
-       # Initialize scheduled timeframe posts
-       self.next_scheduled_posts = {
-           "1h": datetime.now() + timedelta(minutes=random.randint(10, 30)),
-           "24h": datetime.now() + timedelta(hours=random.randint(1, 3)),
-           "7d": datetime.now() + timedelta(hours=random.randint(4, 8))
-       }
+        # Initialize scheduled timeframe posts
+        self.next_scheduled_posts = {
+            "1h": strip_timezone(datetime.now() + timedelta(minutes=random.randint(10, 30))),
+            "24h": strip_timezone(datetime.now() + timedelta(hours=random.randint(1, 3))),
+            "7d": strip_timezone(datetime.now() + timedelta(hours=random.randint(4, 8)))
+        }
        
-       # Initialize reply functionality components
-       self.timeline_scraper = TimelineScraper(self.browser, self.config, self.config.db)
-       self.reply_handler = ReplyHandler(self.browser, self.config, self.llm_provider, self.coingecko, self.config.db)
-       self.content_analyzer = ContentAnalyzer(self.config, self.config.db)
+        # Initialize reply functionality components
+        self.timeline_scraper = TimelineScraper(self.browser, self.config, self.config.db)
+        self.reply_handler = ReplyHandler(self.browser, self.config, self.llm_provider, self.coingecko, self.config.db)
+        self.content_analyzer = ContentAnalyzer(self.config, self.config.db)
        
-       # Reply tracking and control
-       self.last_reply_check = datetime.now() - timedelta(minutes=30)  # Start checking soon
-       self.reply_check_interval = 60  # Check for posts to reply to every 60 minutes
-       self.max_replies_per_cycle = 10  # Maximum 10 replies per cycle
-       self.reply_cooldown = 20  # Minutes between reply cycles
-       self.last_reply_time = datetime.now() - timedelta(minutes=self.reply_cooldown)  # Allow immediate first run
+        # Reply tracking and control
+        self.last_reply_check = strip_timezone(datetime.now() - timedelta(minutes=30))  # Start checking soon
+        self.reply_check_interval = 60  # Check for posts to reply to every 60 minutes
+        self.max_replies_per_cycle = 10  # Maximum 10 replies per cycle
+        self.reply_cooldown = 20  # Minutes between reply cycles
+        self.last_reply_time = strip_timezone(datetime.now() - timedelta(minutes=self.reply_cooldown))  # Allow immediate first run
        
-       logger.log_startup()
+        logger.log_startup()
 
     @ensure_naive_datetimes
     def _check_for_reply_opportunities(self, market_data: Dict[str, Any]) -> bool:
         """
-        Check for posts to reply to and generate replies with enhanced content analysis
-        Returns True if any replies were posted
+        Enhanced check for posts to reply to with multiple fallback mechanisms
+        and detailed logging for better debugging
+    
+        Args:
+            market_data: Current market data dictionary
+        
+        Returns:
+            True if any replies were posted
         """
         now = strip_timezone(datetime.now())
 
         # Check if it's time to look for posts to reply to
-        time_since_last_check = safe_datetime_diff(now, self.last_reply_check) / 300
+        time_since_last_check = safe_datetime_diff(now, self.last_reply_check) / 60
         if time_since_last_check < self.reply_check_interval:
             logger.logger.debug(f"Skipping reply check, {time_since_last_check:.1f} minutes since last check (interval: {self.reply_check_interval})")
             return False
     
         # Also check cooldown period
-        time_since_last_reply = safe_datetime_diff(now, self.last_reply_time) / 300
+        time_since_last_reply = safe_datetime_diff(now, self.last_reply_time) / 60
         if time_since_last_reply < self.reply_cooldown:
             logger.logger.debug(f"In reply cooldown period, {time_since_last_reply:.1f} minutes since last reply (cooldown: {self.reply_cooldown})")
             return False
@@ -180,266 +195,560 @@ class CryptoAnalysisBot:
         self.last_reply_check = now
     
         try:
-            # Scrape timeline for posts - get more to allow for better filtering
-            posts = self.timeline_scraper.scrape_timeline(count=self.max_replies_per_cycle * 3)
-            logger.logger.info(f"Timeline scraping completed - found {len(posts) if posts else 0} posts")
+            # Try multiple post gathering strategies with fallbacks
+            success = self._try_normal_reply_strategy(market_data)
+            if success:
+                return True
+            
+            # First fallback: Try with lower threshold for reply-worthy posts
+            success = self._try_lower_threshold_reply_strategy(market_data)
+            if success:
+                return True
+            
+            # Second fallback: Try replying to trending posts even if not directly crypto-related
+            success = self._try_trending_posts_reply_strategy(market_data)
+            if success:
+                return True
+        
+            # Final fallback: Try replying to any post from major crypto accounts
+            success = self._try_crypto_accounts_reply_strategy(market_data)
+            if success:
+                return True
+        
+            logger.logger.warning("All reply strategies failed, no suitable posts found")
+            return False
+        
+        except Exception as e:
+            logger.log_error("Check For Reply Opportunities", str(e))
+            return False
+
+    @ensure_naive_datetimes
+    def _try_normal_reply_strategy(self, market_data: Dict[str, Any]) -> bool:
+        """
+        Standard reply strategy with normal thresholds
     
+        Args:
+            market_data: Market data dictionary
+        
+        Returns:
+            True if any replies were posted
+        """
+        try:
+            # Get more posts to increase chances of finding suitable ones
+            posts = self.timeline_scraper.scrape_timeline(count=self.max_replies_per_cycle * 3)
             if not posts:
                 logger.logger.warning("No posts found during timeline scraping")
                 return False
-
+            
+            logger.logger.info(f"Timeline scraping completed - found {len(posts)} posts")
+        
             # Log sample posts for debugging
             for i, post in enumerate(posts[:3]):
                 logger.logger.info(f"Sample post {i}: {post.get('text', '')[:100]}...")
-
-            # Enhanced filtering using ContentAnalyzer's comprehensive methods
-            # First find market-related posts
+        
+            # Find market-related posts
             logger.logger.info(f"Finding market-related posts among {len(posts)} scraped posts")
             market_posts = self.content_analyzer.find_market_related_posts(posts)
-            logger.logger.info(f"Found {len(market_posts)} market-related posts, checking which ones need replies")
+            logger.logger.info(f"Found {len(market_posts)} market-related posts")
         
+            if not market_posts:
+                logger.logger.warning("No market-related posts found")
+                return False
+            
             # Filter out posts we've already replied to
             unreplied_posts = self.content_analyzer.filter_already_replied_posts(market_posts)
             logger.logger.info(f"Found {len(unreplied_posts)} unreplied market-related posts")
         
             if not unreplied_posts:
+                logger.logger.warning("All market-related posts have already been replied to")
                 return False
             
             # Analyze content of each post for engagement metrics
             analyzed_posts = []
             for post in unreplied_posts:
                 analysis = self.content_analyzer.analyze_post(post)
-                # Add the analysis to the post
                 post['content_analysis'] = analysis
                 analyzed_posts.append(post)
-            
-            # Only reply to posts worth replying to based on ContentAnalyzer scoring
+        
+            # Only reply to posts worth replying to based on analysis
             reply_worthy_posts = [post for post in analyzed_posts if post['content_analysis'].get('reply_worthy', False)]
             logger.logger.info(f"Found {len(reply_worthy_posts)} reply-worthy posts")
         
-            # Further prioritize high-value posts
-            high_value_posts = [post for post in reply_worthy_posts if post['content_analysis'].get('high_value', False)]
+            if not reply_worthy_posts:
+                logger.logger.warning("No reply-worthy posts found among market-related posts")
+                return False
         
-            # Balance between high value and regular posts to ensure diversity
-            posts_to_reply = high_value_posts[:int(self.max_replies_per_cycle * 0.7)]  # 70% high value
+            # Balance between high value and regular posts
+            high_value_posts = [post for post in reply_worthy_posts if post['content_analysis'].get('high_value', False)]
+            posts_to_reply = high_value_posts[:int(self.max_replies_per_cycle * 0.7)]
             remaining_slots = self.max_replies_per_cycle - len(posts_to_reply)
         
-            # Add remaining medium-value posts sorted by reply score
             if remaining_slots > 0:
                 medium_value_posts = [p for p in reply_worthy_posts if p not in high_value_posts]
                 medium_value_posts.sort(key=lambda x: x['content_analysis'].get('reply_score', 0), reverse=True)
                 posts_to_reply.extend(medium_value_posts[:remaining_slots])
         
             if not posts_to_reply:
-                logger.logger.info("No posts worth replying to found")
+                logger.logger.warning("No posts selected for reply after prioritization")
                 return False
-            
-            # Generate and post replies using enhanced reply metadata
+        
+            # Generate and post replies
             logger.logger.info(f"Starting to reply to {len(posts_to_reply)} prioritized posts")
             successful_replies = self.reply_handler.reply_to_posts(posts_to_reply, market_data, max_replies=self.max_replies_per_cycle)
         
             if successful_replies > 0:
-                logger.logger.info(f"Successfully posted {successful_replies} replies")
-                self.last_reply_time = now
+                logger.logger.info(f"Successfully posted {successful_replies} replies using normal strategy")
+                self.last_reply_time = strip_timezone(datetime.now())
                 return True
             else:
-                logger.logger.info("No replies were successfully posted")
+                logger.logger.warning("No replies were successfully posted using normal strategy")
                 return False
             
         except Exception as e:
-            logger.log_error("Check For Reply Opportunities", str(e))
+            logger.log_error("Normal Reply Strategy", str(e))
+            return False
+
+    @ensure_naive_datetimes
+    def _try_lower_threshold_reply_strategy(self, market_data: Dict[str, Any]) -> bool:
+        """
+        Reply strategy with lower thresholds for reply-worthiness
+    
+        Args:
+            market_data: Market data dictionary
+        
+        Returns:
+            True if any replies were posted
+        """
+        try:
+            # Get fresh posts
+            posts = self.timeline_scraper.scrape_timeline(count=self.max_replies_per_cycle * 3)
+            if not posts:
+                logger.logger.warning("No posts found during lower threshold timeline scraping")
+                return False
+            
+            logger.logger.info(f"Lower threshold timeline scraping completed - found {len(posts)} posts")
+        
+            # Find posts with ANY crypto-related content, not just market-focused
+            crypto_posts = []
+            for post in posts:
+                text = post.get('text', '').lower()
+                # Check for ANY crypto-related terms
+                if any(term in text for term in ['crypto', 'bitcoin', 'btc', 'eth', 'blockchain', 'token', 'coin', 'defi']):
+                    crypto_posts.append(post)
+        
+            logger.logger.info(f"Found {len(crypto_posts)} crypto-related posts with lower threshold")
+        
+            if not crypto_posts:
+                logger.logger.warning("No crypto-related posts found with lower threshold")
+                return False
+            
+            # Filter out posts we've already replied to
+            unreplied_posts = self.content_analyzer.filter_already_replied_posts(crypto_posts)
+            logger.logger.info(f"Found {len(unreplied_posts)} unreplied crypto-related posts with lower threshold")
+        
+            if not unreplied_posts:
+                return False
+            
+            # Add basic content analysis but don't filter by reply_worthy
+            analyzed_posts = []
+            for post in unreplied_posts:
+                analysis = self.content_analyzer.analyze_post(post)
+                # Override reply_worthy to True for all posts in this fallback
+                analysis['reply_worthy'] = True
+                post['content_analysis'] = analysis
+                analyzed_posts.append(post)
+        
+            # Just take the top N posts by engagement
+            analyzed_posts.sort(key=lambda x: x.get('engagement_score', 0), reverse=True)
+            posts_to_reply = analyzed_posts[:self.max_replies_per_cycle]
+        
+            if not posts_to_reply:
+                return False
+        
+            # Generate and post replies with lower standards
+            logger.logger.info(f"Starting to reply to {len(posts_to_reply)} posts with lower threshold")
+            successful_replies = self.reply_handler.reply_to_posts(posts_to_reply, market_data, max_replies=self.max_replies_per_cycle)
+        
+            if successful_replies > 0:
+                logger.logger.info(f"Successfully posted {successful_replies} replies using lower threshold strategy")
+                self.last_reply_time = strip_timezone(datetime.now())
+                return True
+            else:
+                logger.logger.warning("No replies were successfully posted using lower threshold strategy")
+                return False
+            
+        except Exception as e:
+            logger.log_error("Lower Threshold Reply Strategy", str(e))
+            return False
+
+    @ensure_naive_datetimes
+    def _try_trending_posts_reply_strategy(self, market_data: Dict[str, Any]) -> bool:
+        """
+        Reply strategy focusing on trending posts regardless of crypto relevance
+    
+        Args:
+            market_data: Market data dictionary
+        
+        Returns:
+            True if any replies were posted
+        """
+        try:
+            # Get trending posts - use a different endpoint if possible
+            posts = self.timeline_scraper.scrape_timeline(count=self.max_replies_per_cycle * 2)
+            if not posts:
+                return False
+            
+            logger.logger.info(f"Trending posts scraping completed - found {len(posts)} posts")
+        
+            # Sort by engagement (likes, retweets, etc.) to find trending posts
+            posts.sort(key=lambda x: (
+                x.get('like_count', 0) + 
+                x.get('retweet_count', 0) * 2 + 
+                x.get('reply_count', 0) * 0.5
+            ), reverse=True)
+        
+            # Get the top trending posts
+            trending_posts = posts[:int(self.max_replies_per_cycle * 1.5)]
+        
+            # Filter out posts we've already replied to
+            unreplied_posts = self.content_analyzer.filter_already_replied_posts(trending_posts)
+            logger.logger.info(f"Found {len(unreplied_posts)} unreplied trending posts")
+        
+            if not unreplied_posts:
+                return False
+            
+            # Add minimal content analysis
+            for post in unreplied_posts:
+                post['content_analysis'] = {'reply_worthy': True, 'reply_score': 75}
+        
+            # Generate and post replies to trending content
+            logger.logger.info(f"Starting to reply to {len(unreplied_posts[:self.max_replies_per_cycle])} trending posts")
+            successful_replies = self.reply_handler.reply_to_posts(
+                unreplied_posts[:self.max_replies_per_cycle], 
+                market_data, 
+                max_replies=self.max_replies_per_cycle
+            )
+        
+            if successful_replies > 0:
+                logger.logger.info(f"Successfully posted {successful_replies} replies to trending posts")
+                self.last_reply_time = strip_timezone(datetime.now())
+                return True
+            else:
+                logger.logger.warning("No replies were successfully posted to trending posts")
+                return False
+            
+        except Exception as e:
+            logger.log_error("Trending Posts Reply Strategy", str(e))
+            return False
+
+    @ensure_naive_datetimes
+    def _try_crypto_accounts_reply_strategy(self, market_data: Dict[str, Any]) -> bool:
+        """
+        Reply strategy focusing on major crypto accounts regardless of post content
+    
+        Args:
+            market_data: Market data dictionary
+        
+        Returns:
+            True if any replies were posted
+        """
+        try:
+            # Major crypto accounts to target
+            crypto_accounts = [
+                'cz_binance', 'vitalikbuterin', 'SBF_FTX', 'aantonop', 'cryptohayes', 'coinbase',
+                'kraken', 'whale_alert', 'CoinDesk', 'Cointelegraph', 'binance', 'BitcoinMagazine'
+            ]
+        
+            all_posts = []
+        
+            # Try to get posts from specific accounts
+            for account in crypto_accounts[:3]:  # Limit to 3 accounts to avoid too many requests
+                try:
+                    # This would need an account-specific scraper method
+                    # For now, use regular timeline as placeholder
+                    posts = self.timeline_scraper.scrape_timeline(count=5)
+                    if posts:
+                        all_posts.extend(posts)
+                except Exception as e:
+                    logger.logger.debug(f"Error getting posts for account {account}: {str(e)}")
+                    continue
+        
+            # If no account-specific posts, get timeline posts and filter
+            if not all_posts:
+                posts = self.timeline_scraper.scrape_timeline(count=self.max_replies_per_cycle * 3)
+            
+                # Filter for posts from crypto accounts (based on handle or name)
+                for post in posts:
+                    handle = post.get('author_handle', '').lower()
+                    name = post.get('author_name', '').lower()
+                
+                    if any(account.lower() in handle or account.lower() in name for account in crypto_accounts):
+                        all_posts.append(post)
+                    
+                    # Also include posts with many crypto terms
+                    text = post.get('text', '').lower()
+                    crypto_terms = ['crypto', 'bitcoin', 'btc', 'eth', 'blockchain', 'token', 'coin', 'defi', 
+                                   'altcoin', 'nft', 'mining', 'wallet', 'address', 'exchange']
+                    if sum(1 for term in crypto_terms if term in text) >= 3:
+                        all_posts.append(post)
+        
+            # Remove duplicates
+            unique_posts = []
+            post_ids = set()
+            for post in all_posts:
+                post_id = post.get('post_id')
+                if post_id and post_id not in post_ids:
+                    post_ids.add(post_id)
+                    unique_posts.append(post)
+        
+            logger.logger.info(f"Found {len(unique_posts)} posts from crypto accounts")
+        
+            # Filter out posts we've already replied to
+            unreplied_posts = self.content_analyzer.filter_already_replied_posts(unique_posts)
+            logger.logger.info(f"Found {len(unreplied_posts)} unreplied posts from crypto accounts")
+        
+            if not unreplied_posts:
+                return False
+            
+            # Add minimal content analysis
+            for post in unreplied_posts:
+                post['content_analysis'] = {'reply_worthy': True, 'reply_score': 80}
+        
+            # Generate and post replies to crypto accounts
+            logger.logger.info(f"Starting to reply to {len(unreplied_posts[:self.max_replies_per_cycle])} crypto account posts")
+            successful_replies = self.reply_handler.reply_to_posts(
+                unreplied_posts[:self.max_replies_per_cycle], 
+                market_data, 
+                max_replies=self.max_replies_per_cycle
+            )
+        
+            if successful_replies > 0:
+                logger.logger.info(f"Successfully posted {successful_replies} replies to crypto accounts")
+                self.last_reply_time = strip_timezone(datetime.now())
+                return True
+            else:
+                logger.logger.warning("No replies were successfully posted to crypto accounts")
+                return False
+            
+        except Exception as e:
+            logger.log_error("Crypto Accounts Reply Strategy", str(e))
             return False
 
     def _get_historical_volume_data(self, chain: str, minutes: int = None, timeframe: str = "1h") -> List[Dict[str, Any]]:
-       """
-       Get historical volume data for the specified window period
-       Adjusted based on timeframe for appropriate historical context
-       """
-       try:
-           # Adjust window size based on timeframe if not specifically provided
-           if minutes is None:
-               if timeframe == "1h":
-                   minutes = self.config.VOLUME_WINDOW_MINUTES  # Default (typically 60)
-               elif timeframe == "24h":
-                   minutes = 24 * 60  # Last 24 hours
-               elif timeframe == "7d":
-                   minutes = 7 * 24 * 60  # Last 7 days
-               else:
-                   minutes = self.config.VOLUME_WINDOW_MINUTES
+        """
+        Get historical volume data for the specified window period
+        Adjusted based on timeframe for appropriate historical context
+        
+        Args:
+            chain: Token/chain symbol
+            minutes: Time window in minutes (if None, determined by timeframe)
+            timeframe: Timeframe for the data (1h, 24h, 7d)
+            
+        Returns:
+            List of historical volume data points
+        """
+        try:
+            # Adjust window size based on timeframe if not specifically provided
+            if minutes is None:
+                if timeframe == "1h":
+                    minutes = self.config.VOLUME_WINDOW_MINUTES  # Default (typically 60)
+                elif timeframe == "24h":
+                    minutes = 24 * 60  # Last 24 hours
+                elif timeframe == "7d":
+                    minutes = 7 * 24 * 60  # Last 7 days
+                else:
+                    minutes = self.config.VOLUME_WINDOW_MINUTES
                
-           window_start = datetime.now() - timedelta(minutes=minutes)
-           query = """
-               SELECT timestamp, volume
-               FROM market_data
-               WHERE chain = ? AND timestamp >= ?
-               ORDER BY timestamp DESC
-           """
+            window_start = strip_timezone(datetime.now() - timedelta(minutes=minutes))
+            query = """
+                SELECT timestamp, volume
+                FROM market_data
+                WHERE chain = ? AND timestamp >= ?
+                ORDER BY timestamp DESC
+            """
            
-           conn = self.config.db.conn
-           cursor = conn.cursor()
-           cursor.execute(query, (chain, window_start))
-           results = cursor.fetchall()
+            conn = self.config.db.conn
+            cursor = conn.cursor()
+            cursor.execute(query, (chain, window_start))
+            results = cursor.fetchall()
            
-           volume_data = [
-               {
-                   'timestamp': datetime.fromisoformat(row[0]),
-                   'volume': float(row[1])
-               }
-               for row in results
-           ]
+            volume_data = [
+                {
+                    'timestamp': strip_timezone(datetime.fromisoformat(row[0])),
+                    'volume': float(row[1])
+                }
+                for row in results
+            ]
            
-           logger.logger.debug(
-               f"Retrieved {len(volume_data)} volume data points for {chain} "
-               f"over last {minutes} minutes (timeframe: {timeframe})"
-           )
+            logger.logger.debug(
+                f"Retrieved {len(volume_data)} volume data points for {chain} "
+                f"over last {minutes} minutes (timeframe: {timeframe})"
+            )
            
-           return volume_data
+            return volume_data
            
-       except Exception as e:
-           logger.log_error(f"Historical Volume Data - {chain} ({timeframe})", str(e))
-           return []
+        except Exception as e:
+            logger.log_error(f"Historical Volume Data - {chain} ({timeframe})", str(e))
+            return []
        
     def _is_duplicate_analysis(self, new_tweet: str, last_posts: List[str], timeframe: str = "1h") -> bool:
-       """
-       Enhanced duplicate detection with time-based thresholds and timeframe awareness.
-       Applies different checks based on how recently similar content was posted:
-       - Very recent posts (< 15 min): Check for exact matches
-       - Recent posts (15-30 min): Check for high similarity
-       - Older posts (> 30 min): Allow similar content
-       """
-       try:
-           # Log that we're using enhanced duplicate detection
-           logger.logger.info(f"Using enhanced time-based duplicate detection for {timeframe} timeframe")
+        """
+        Enhanced duplicate detection with time-based thresholds and timeframe awareness.
+        Applies different checks based on how recently similar content was posted:
+        - Very recent posts (< 15 min): Check for exact matches
+        - Recent posts (15-30 min): Check for high similarity
+        - Older posts (> 30 min): Allow similar content
+        
+        Args:
+            new_tweet: The new tweet text to check for duplication
+            last_posts: List of recently posted tweets
+            timeframe: Timeframe for the post (1h, 24h, 7d)
+            
+        Returns:
+            Boolean indicating if the tweet is a duplicate
+        """
+        try:
+            # Log that we're using enhanced duplicate detection
+            logger.logger.info(f"Using enhanced time-based duplicate detection for {timeframe} timeframe")
            
-           # Define time windows for different levels of duplicate checking
-           # Adjust windows based on timeframe
-           if timeframe == "1h":
-               VERY_RECENT_WINDOW_MINUTES = 15
-               RECENT_WINDOW_MINUTES = 30
-               HIGH_SIMILARITY_THRESHOLD = 0.85  # 85% similar for recent posts
-           elif timeframe == "24h":
-               VERY_RECENT_WINDOW_MINUTES = 120  # 2 hours
-               RECENT_WINDOW_MINUTES = 240       # 4 hours
-               HIGH_SIMILARITY_THRESHOLD = 0.80  # Slightly lower threshold for daily predictions
-           else:  # 7d
-               VERY_RECENT_WINDOW_MINUTES = 720  # 12 hours
-               RECENT_WINDOW_MINUTES = 1440      # 24 hours
-               HIGH_SIMILARITY_THRESHOLD = 0.75  # Even lower threshold for weekly predictions
+            # Define time windows for different levels of duplicate checking
+            # Adjust windows based on timeframe
+            if timeframe == "1h":
+                VERY_RECENT_WINDOW_MINUTES = 15
+                RECENT_WINDOW_MINUTES = 30
+                HIGH_SIMILARITY_THRESHOLD = 0.85  # 85% similar for recent posts
+            elif timeframe == "24h":
+                VERY_RECENT_WINDOW_MINUTES = 120  # 2 hours
+                RECENT_WINDOW_MINUTES = 240       # 4 hours
+                HIGH_SIMILARITY_THRESHOLD = 0.80  # Slightly lower threshold for daily predictions
+            else:  # 7d
+                VERY_RECENT_WINDOW_MINUTES = 720  # 12 hours
+                RECENT_WINDOW_MINUTES = 1440      # 24 hours
+                HIGH_SIMILARITY_THRESHOLD = 0.75  # Even lower threshold for weekly predictions
            
-           # 1. Check for exact matches in very recent database entries
-           conn = self.config.db.conn
-           cursor = conn.cursor()
+            # 1. Check for exact matches in very recent database entries
+            conn = self.config.db.conn
+            cursor = conn.cursor()
            
-           # Very recent exact duplicates check
-           cursor.execute("""
-               SELECT content FROM posted_content 
-               WHERE timestamp >= datetime('now', '-' || ? || ' minutes')
-               AND timeframe = ?
-           """, (VERY_RECENT_WINDOW_MINUTES, timeframe))
+            # Very recent exact duplicates check
+            cursor.execute("""
+                SELECT content FROM posted_content 
+                WHERE timestamp >= datetime('now', '-' || ? || ' minutes')
+                AND timeframe = ?
+            """, (VERY_RECENT_WINDOW_MINUTES, timeframe))
            
-           very_recent_posts = [row[0] for row in cursor.fetchall()]
+            very_recent_posts = [row[0] for row in cursor.fetchall()]
            
-           # Check for exact matches in very recent posts
-           for post in very_recent_posts:
-               if post.strip() == new_tweet.strip():
-                   logger.logger.info(f"Exact duplicate detected within last {VERY_RECENT_WINDOW_MINUTES} minutes for {timeframe}")
-                   return True
+            # Check for exact matches in very recent posts
+            for post in very_recent_posts:
+                if post.strip() == new_tweet.strip():
+                    logger.logger.info(f"Exact duplicate detected within last {VERY_RECENT_WINDOW_MINUTES} minutes for {timeframe}")
+                    return True
            
-           # 2. Check for high similarity in recent posts
-           cursor.execute("""
-               SELECT content FROM posted_content 
-               WHERE timestamp >= datetime('now', '-' || ? || ' minutes')
-               AND timestamp < datetime('now', '-' || ? || ' minutes')
-               AND timeframe = ?
-           """, (RECENT_WINDOW_MINUTES, VERY_RECENT_WINDOW_MINUTES, timeframe))
+            # 2. Check for high similarity in recent posts
+            cursor.execute("""
+                SELECT content FROM posted_content 
+                WHERE timestamp >= datetime('now', '-' || ? || ' minutes')
+                AND timestamp < datetime('now', '-' || ? || ' minutes')
+                AND timeframe = ?
+            """, (RECENT_WINDOW_MINUTES, VERY_RECENT_WINDOW_MINUTES, timeframe))
            
-           recent_posts = [row[0] for row in cursor.fetchall()]
+            recent_posts = [row[0] for row in cursor.fetchall()]
            
-           # Calculate similarity for recent posts
-           new_content = new_tweet.lower()
+            # Calculate similarity for recent posts
+            new_content = new_tweet.lower()
            
-           for post in recent_posts:
-               post_content = post.lower()
+            for post in recent_posts:
+                post_content = post.lower()
                
-               # Calculate a simple similarity score based on word overlap
-               new_words = set(new_content.split())
-               post_words = set(post_content.split())
+                # Calculate a simple similarity score based on word overlap
+                new_words = set(new_content.split())
+                post_words = set(post_content.split())
                
-               if new_words and post_words:
-                   overlap = len(new_words.intersection(post_words))
-                   similarity = overlap / max(len(new_words), len(post_words))
+                if new_words and post_words:
+                    overlap = len(new_words.intersection(post_words))
+                    similarity = overlap / max(len(new_words), len(post_words))
                    
-                   # Apply high similarity threshold for recent posts
-                   if similarity > HIGH_SIMILARITY_THRESHOLD:
-                       logger.logger.info(f"High similarity ({similarity:.2f}) detected within last {RECENT_WINDOW_MINUTES} minutes for {timeframe}")
-                       return True
+                    # Apply high similarity threshold for recent posts
+                    if similarity > HIGH_SIMILARITY_THRESHOLD:
+                        logger.logger.info(f"High similarity ({similarity:.2f}) detected within last {RECENT_WINDOW_MINUTES} minutes for {timeframe}")
+                        return True
            
-           # 3. Also check exact duplicates in last posts from Twitter
-           # This prevents double-posting in case of database issues
-           for post in last_posts:
-               if post.strip() == new_tweet.strip():
-                   logger.logger.info(f"Exact duplicate detected in recent Twitter posts for {timeframe}")
-                   return True
+            # 3. Also check exact duplicates in last posts from Twitter
+            # This prevents double-posting in case of database issues
+            for post in last_posts:
+                if post.strip() == new_tweet.strip():
+                    logger.logger.info(f"Exact duplicate detected in recent Twitter posts for {timeframe}")
+                    return True
            
-           # If we get here, it's not a duplicate according to our criteria
-           logger.logger.info(f"No duplicates detected with enhanced time-based criteria for {timeframe}")
-           return False
+            # If we get here, it's not a duplicate according to our criteria
+            logger.logger.info(f"No duplicates detected with enhanced time-based criteria for {timeframe}")
+            return False
            
-       except Exception as e:
-           logger.log_error(f"Duplicate Check - {timeframe}", str(e))
-           # If the duplicate check fails, allow the post to be safe
-           logger.logger.warning("Duplicate check failed, allowing post to proceed")
-           return False
+        except Exception as e:
+            logger.log_error(f"Duplicate Check - {timeframe}", str(e))
+            # If the duplicate check fails, allow the post to be safe
+            logger.logger.warning("Duplicate check failed, allowing post to proceed")
+            return False
 
     def _start_prediction_thread(self) -> None:
-       """Start background thread for asynchronous prediction generation"""
-       if self.prediction_thread is None or not self.prediction_thread.is_alive():
-           self.prediction_thread_running = True
-           self.prediction_thread = threading.Thread(target=self._process_prediction_queue)
-           self.prediction_thread.daemon = True
-           self.prediction_thread.start()
-           logger.logger.info("Started prediction processing thread")
+        """
+        Start background thread for asynchronous prediction generation
+        """
+        if self.prediction_thread is None or not self.prediction_thread.is_alive():
+            self.prediction_thread_running = True
+            self.prediction_thread = threading.Thread(target=self._process_prediction_queue)
+            self.prediction_thread.daemon = True
+            self.prediction_thread.start()
+            logger.logger.info("Started prediction processing thread")
            
     def _process_prediction_queue(self) -> None:
-       """Process predictions from the queue in the background"""
-       while self.prediction_thread_running:
-           try:
-               # Get a prediction task from the queue with timeout
-               try:
-                   task = self.prediction_queue.get(timeout=10)
-               except queue.Empty:
-                   # No tasks, just continue the loop
-                   continue
+        """
+        Process predictions from the queue in the background
+        """
+        while self.prediction_thread_running:
+            try:
+                # Get a prediction task from the queue with timeout
+                try:
+                    task = self.prediction_queue.get(timeout=10)
+                except queue.Empty:
+                    # No tasks, just continue the loop
+                    continue
                    
-               # Process the prediction task
-               token, timeframe, market_data = task
+                # Process the prediction task
+                token, timeframe, market_data = task
                
-               logger.logger.debug(f"Processing queued prediction for {token} ({timeframe})")
+                logger.logger.debug(f"Processing queued prediction for {token} ({timeframe})")
                
-               # Generate the prediction
-               prediction = self.prediction_engine.generate_prediction(
-                   token=token, 
-                   market_data=market_data,
-                   timeframe=timeframe
-               )
+                # Generate the prediction
+                prediction = self.prediction_engine.generate_prediction(
+                    token=token, 
+                    market_data=market_data,
+                    timeframe=timeframe
+                )
                
-               # Store in memory for quick access
-               self.timeframe_predictions[timeframe][token] = prediction
+                # Store in memory for quick access
+                self.timeframe_predictions[timeframe][token] = prediction
                
-               # Mark task as done
-               self.prediction_queue.task_done()
+                # Mark task as done
+                self.prediction_queue.task_done()
                
-               # Short sleep to prevent CPU overuse
-               time.sleep(0.5)
+                # Short sleep to prevent CPU overuse
+                time.sleep(0.5)
                
-           except Exception as e:
-               logger.log_error("Prediction Thread Error", str(e))
-               time.sleep(5)  # Sleep longer on error
+            except Exception as e:
+                logger.log_error("Prediction Thread Error", str(e))
+                time.sleep(5)  # Sleep longer on error
                
-       logger.logger.info("Prediction processing thread stopped")
+        logger.logger.info("Prediction processing thread stopped")
 
     def _login_to_twitter(self) -> bool:
-        """Log into Twitter with enhanced verification and detection of existing sessions"""
+        """
+        Log into Twitter with enhanced verification and detection of existing sessions
+        
+        Returns:
+            Boolean indicating login success
+        """
         try:
             logger.logger.info("Starting Twitter login")
             self.browser.driver.set_page_load_timeout(45)
@@ -506,128 +815,152 @@ class CryptoAnalysisBot:
             return False
 
     def _verify_login(self) -> bool:
-       """Verify Twitter login success"""
-       try:
-           verification_methods = [
-               lambda: WebDriverWait(self.browser.driver, 30).until(
-                   EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="SideNav_NewTweet_Button"]'))
-               ),
-               lambda: WebDriverWait(self.browser.driver, 30).until(
-                   EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="AppTabBar_Profile_Link"]'))
-               ),
-               lambda: any(path in self.browser.driver.current_url 
-                         for path in ['home', 'twitter.com/home'])
-           ]
+        """
+        Verify Twitter login success
+        
+        Returns:
+            Boolean indicating if login verification succeeded
+        """
+        try:
+            verification_methods = [
+                lambda: WebDriverWait(self.browser.driver, 30).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="SideNav_NewTweet_Button"]'))
+                ),
+                lambda: WebDriverWait(self.browser.driver, 30).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="AppTabBar_Profile_Link"]'))
+                ),
+                lambda: any(path in self.browser.driver.current_url 
+                          for path in ['home', 'twitter.com/home'])
+            ]
            
-           for method in verification_methods:
-               try:
-                   if method():
-                       return True
-               except:
-                   continue
+            for method in verification_methods:
+                try:
+                    if method():
+                        return True
+                except:
+                    continue
            
-           return False
+            return False
            
-       except Exception as e:
-           logger.log_error("Login Verification", str(e))
-           return False
+        except Exception as e:
+            logger.log_error("Login Verification", str(e))
+            return False
 
     def _queue_predictions_for_all_timeframes(self, token: str, market_data: Dict[str, Any]) -> None:
-       """Queue predictions for all timeframes for a specific token"""
-       for timeframe in self.timeframes:
-           # Skip if we already have a recent prediction
-           if (token in self.timeframe_predictions.get(timeframe, {}) and 
-               datetime.now() - self.timeframe_predictions[timeframe].get(token, {}).get('timestamp', 
-                                                                                        datetime.now() - timedelta(hours=3)) 
-               < timedelta(hours=1)):
-               logger.logger.debug(f"Skipping {timeframe} prediction for {token} - already have recent prediction")
-               continue
+        """
+        Queue predictions for all timeframes for a specific token
+        
+        Args:
+            token: Token symbol
+            market_data: Market data dictionary
+        """
+        for timeframe in self.timeframes:
+            # Skip if we already have a recent prediction
+            if (token in self.timeframe_predictions.get(timeframe, {}) and 
+               safe_datetime_diff(datetime.now(), self.timeframe_predictions[timeframe].get(token, {}).get('timestamp', 
+                                                                                        datetime.now() - timedelta(hours=3))) 
+               < 3600):  # Less than 1 hour old
+                logger.logger.debug(f"Skipping {timeframe} prediction for {token} - already have recent prediction")
+                continue
                
-           # Add prediction task to queue
-           self.prediction_queue.put((token, timeframe, market_data))
-           logger.logger.debug(f"Queued {timeframe} prediction for {token}")
+            # Add prediction task to queue
+            self.prediction_queue.put((token, timeframe, market_data))
+            logger.logger.debug(f"Queued {timeframe} prediction for {token}")
 
     def _post_analysis(self, tweet_text: str, timeframe: str = "1h") -> bool:
-       """
-       Post analysis to Twitter with robust button handling
-       Tracks post by timeframe
-       """
-       max_retries = 3
-       retry_count = 0
-       
-       while retry_count < max_retries:
-           try:
-               self.browser.driver.get('https://twitter.com/compose/tweet')
-               time.sleep(3)
-               
-               text_area = WebDriverWait(self.browser.driver, 10).until(
-                   EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweetTextarea_0"]'))
-               )
-               text_area.click()
-               time.sleep(1)
-               
-               # Ensure tweet text only contains BMP characters
-               safe_tweet_text = ''.join(char for char in tweet_text if ord(char) < 0x10000)
-               
-               # Simply send the tweet text directly - no handling of hashtags needed
-               text_area.send_keys(safe_tweet_text)
-               time.sleep(2)
+        """
+        Post analysis to Twitter with robust button handling
+        Tracks post by timeframe
+        
+        Args:
+            tweet_text: Text to post
+            timeframe: Timeframe for the analysis
+            
+        Returns:
+            Boolean indicating if posting succeeded
+        """
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                self.browser.driver.get('https://twitter.com/compose/tweet')
+                time.sleep(3)
+                
+                text_area = WebDriverWait(self.browser.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweetTextarea_0"]'))
+                )
+                text_area.click()
+                time.sleep(1)
+                
+                # Ensure tweet text only contains BMP characters
+                safe_tweet_text = ''.join(char for char in tweet_text if ord(char) < 0x10000)
+                
+                # Simply send the tweet text directly - no handling of hashtags needed
+                text_area.send_keys(safe_tweet_text)
+                time.sleep(2)
 
-               post_button = None
-               button_locators = [
-                   (By.CSS_SELECTOR, '[data-testid="tweetButton"]'),
-                   (By.XPATH, "//div[@role='button'][contains(., 'Post')]"),
-                   (By.XPATH, "//span[text()='Post']")
-               ]
+                post_button = None
+                button_locators = [
+                    (By.CSS_SELECTOR, '[data-testid="tweetButton"]'),
+                    (By.XPATH, "//div[@role='button'][contains(., 'Post')]"),
+                    (By.XPATH, "//span[text()='Post']")
+                ]
 
-               for locator in button_locators:
-                   try:
-                       post_button = WebDriverWait(self.browser.driver, 5).until(
-                           EC.element_to_be_clickable(locator)
-                       )
-                       if post_button:
-                           break
-                   except:
-                       continue
+                for locator in button_locators:
+                    try:
+                        post_button = WebDriverWait(self.browser.driver, 5).until(
+                            EC.element_to_be_clickable(locator)
+                        )
+                        if post_button:
+                            break
+                    except:
+                        continue
 
-               if post_button:
-                   self.browser.driver.execute_script("arguments[0].scrollIntoView(true);", post_button)
-                   time.sleep(1)
-                   self.browser.driver.execute_script("arguments[0].click();", post_button)
-                   time.sleep(5)
-                   
-                   # Update last post time for this timeframe
-                   self.timeframe_last_post[timeframe] = datetime.now()
-                   
-                   # Update next scheduled post time
-                   hours_to_add = self.timeframe_posting_frequency.get(timeframe, 1)
-                   # Add some randomness to prevent predictable patterns
-                   jitter = random.uniform(0.8, 1.2)
-                   self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=hours_to_add * jitter)
-                   
-                   logger.logger.info(f"{timeframe} tweet posted successfully")
-                   logger.logger.debug(f"Next {timeframe} post scheduled for {self.next_scheduled_posts[timeframe]}")
-                   return True
-               else:
-                   logger.logger.error(f"Could not find post button for {timeframe} tweet")
-                   retry_count += 1
-                   time.sleep(2)
-                   
-           except Exception as e:
-               logger.logger.error(f"{timeframe} tweet posting error, attempt {retry_count + 1}: {str(e)}")
-               retry_count += 1
-               wait_time = retry_count * 10
-               logger.logger.warning(f"Waiting {wait_time}s before retry...")
-               time.sleep(wait_time)
-               continue
-       
-       logger.log_error(f"Tweet Creation - {timeframe}", "Maximum retries reached")
-       return False
+                if post_button:
+                    self.browser.driver.execute_script("arguments[0].scrollIntoView(true);", post_button)
+                    time.sleep(1)
+                    self.browser.driver.execute_script("arguments[0].click();", post_button)
+                    time.sleep(5)
+                    
+                    # Update last post time for this timeframe
+                    self.timeframe_last_post[timeframe] = strip_timezone(datetime.now())
+                    
+                    # Update next scheduled post time
+                    hours_to_add = self.timeframe_posting_frequency.get(timeframe, 1)
+                    # Add some randomness to prevent predictable patterns
+                    jitter = random.uniform(0.8, 1.2)
+                    self.next_scheduled_posts[timeframe] = strip_timezone(datetime.now() + timedelta(hours=hours_to_add * jitter))
+                    
+                    logger.logger.info(f"{timeframe} tweet posted successfully")
+                    logger.logger.debug(f"Next {timeframe} post scheduled for {self.next_scheduled_posts[timeframe]}")
+                    return True
+                else:
+                    logger.logger.error(f"Could not find post button for {timeframe} tweet")
+                    retry_count += 1
+                    time.sleep(2)
+                    
+            except Exception as e:
+                logger.logger.error(f"{timeframe} tweet posting error, attempt {retry_count + 1}: {str(e)}")
+                retry_count += 1
+                wait_time = retry_count * 10
+                logger.logger.warning(f"Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+                continue
+        
+        logger.log_error(f"Tweet Creation - {timeframe}", "Maximum retries reached")
+        return False
    
+    @ensure_naive_datetimes
     def _get_last_posts(self, count: int = 10) -> List[Dict[str, Any]]:
         """
         Get last N posts from timeline with timeframe detection
-        Returns list of post information including detected timeframe
+        
+        Args:
+            count: Number of posts to retrieve
+            
+        Returns:
+            List of post information including detected timeframe
         """
         max_retries = 3
         retry_count = 0
@@ -674,7 +1007,7 @@ class CryptoAnalysisBot:
                     
                         post_info = {
                             'text': post_text,
-                            'timestamp': datetime.fromisoformat(timestamp_str) if timestamp_str else None,
+                            'timestamp': strip_timezone(datetime.fromisoformat(timestamp_str)) if timestamp_str else None,
                             'timeframe': detected_timeframe
                         }
                     
@@ -696,29 +1029,52 @@ class CryptoAnalysisBot:
         return []
 
     def _get_last_posts_by_timeframe(self, timeframe: str = "1h", count: int = 5) -> List[str]:
-       """
-       Get last N posts for a specific timeframe
-       Returns just the text content
-       """
-       all_posts = self._get_last_posts(count=20)  # Get more posts to filter from
-       
-       # Filter posts by the requested timeframe
-       filtered_posts = [post['text'] for post in all_posts if post['timeframe'] == timeframe]
-       
-       # Return the requested number of posts
-       return filtered_posts[:count]
+        """
+        Get last N posts for a specific timeframe
+        
+        Args:
+            timeframe: Timeframe to filter for
+            count: Number of posts to retrieve
+            
+        Returns:
+            List of post text content
+        """
+        all_posts = self._get_last_posts(count=20)  # Get more posts to filter from
+        
+        # Filter posts by the requested timeframe
+        filtered_posts = [post['text'] for post in all_posts if post['timeframe'] == timeframe]
+        
+        # Return the requested number of posts
+        return filtered_posts[:count]
 
+    @ensure_naive_datetimes
     def _schedule_timeframe_post(self, timeframe: str, delay_hours: float = None) -> None:
+        """
+        Schedule the next post for a specific timeframe
+        
+        Args:
+            timeframe: Timeframe to schedule for
+            delay_hours: Optional override for delay hours (otherwise uses default frequency)
+        """
         if delay_hours is None:
             # Use default frequency with some randomness
             base_hours = self.timeframe_posting_frequency.get(timeframe, 1)
             delay_hours = base_hours * random.uniform(0.9, 1.1)
         
-        self.next_scheduled_posts[timeframe] = datetime.now() + timedelta(hours=delay_hours)
+        self.next_scheduled_posts[timeframe] = strip_timezone(datetime.now() + timedelta(hours=delay_hours))
         logger.logger.debug(f"Scheduled next {timeframe} post for {self.next_scheduled_posts[timeframe]}")
    
+    @ensure_naive_datetimes
     def _should_post_timeframe_now(self, timeframe: str) -> bool:
-        """Check if it's time to post for a specific timeframe"""
+        """
+        Check if it's time to post for a specific timeframe
+        
+        Args:
+            timeframe: Timeframe to check
+            
+        Returns:
+            Boolean indicating if it's time to post
+        """
         try:
             # Debug
             logger.logger.debug(f"Checking if should post for {timeframe}")
@@ -730,8 +1086,8 @@ class CryptoAnalysisBot:
             last_post_time = self._ensure_datetime(self.timeframe_last_post.get(timeframe, datetime.min))
             logger.logger.debug(f"  Last post time (after ensure): {last_post_time} ({type(last_post_time)})")
         
-            time_since_last = datetime.now() - last_post_time
-            if time_since_last < min_interval:
+            time_since_last = safe_datetime_diff(datetime.now(), last_post_time) / 3600  # Hours
+            if time_since_last < min_interval.total_seconds() / 3600:
                 return False
             
             # Check if scheduled time has been reached
@@ -744,9 +1100,18 @@ class CryptoAnalysisBot:
             # Provide a safe default
             return False
    
+    @ensure_naive_datetimes
     def _post_prediction_for_timeframe(self, token: str, market_data: Dict[str, Any], timeframe: str) -> bool:
         """
         Post a prediction for a specific timeframe
+        
+        Args:
+            token: Token symbol
+            market_data: Market data dictionary
+            timeframe: Timeframe for the prediction
+            
+        Returns:
+            Boolean indicating if posting succeeded
         """
         try:
             # Check if we have a prediction
@@ -800,7 +1165,7 @@ class CryptoAnalysisBot:
             
                 # Update last post time for this timeframe with current datetime
                 # This is important - make sure we're storing a datetime object
-                self.timeframe_last_post[timeframe] = datetime.now()
+                self.timeframe_last_post[timeframe] = strip_timezone(datetime.now())
             
                 logger.logger.info(f"Successfully posted {timeframe} prediction for {token}")
                 return True
@@ -812,8 +1177,17 @@ class CryptoAnalysisBot:
             logger.log_error(f"Post Prediction For Timeframe - {token} ({timeframe})", str(e))
             return False
    
+    @ensure_naive_datetimes
     def _post_timeframe_rotation(self, market_data: Dict[str, Any]) -> bool:
-        """Post predictions in a rotation across timeframes with enhanced token selection and datetime handling"""
+        """
+        Post predictions in a rotation across timeframes with enhanced token selection
+        
+        Args:
+            market_data: Market data dictionary
+            
+        Returns:
+            Boolean indicating if a post was made
+        """
         # Debug timeframe scheduling data
         logger.logger.debug("TIMEFRAME ROTATION DEBUG:")
         for tf in self.timeframes:
@@ -926,10 +1300,699 @@ class CryptoAnalysisBot:
     
         return success
 
+    def _analyze_tech_topics(self, market_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Analyze tech topics for educational content generation
+    
+        Args:
+            market_data: Optional market data for context
+        
+        Returns:
+            Dictionary with tech topic analysis
+        """
+        try:
+            # Get configured tech topics
+            tech_topics = self.config.get_tech_topics()
+        
+            if not tech_topics:
+                logger.logger.warning("No tech topics configured or enabled")
+                return {'enabled': False}
+            
+            # Get recent tech posts from database
+            tech_posts = {}
+            last_tech_post = strip_timezone(datetime.now() - timedelta(days=1))  # Default fallback
+        
+            if self.config.db:
+                try:
+                    # Query last 24 hours of content
+                    recent_posts = self.config.db.get_recent_posts(hours=24)
+                
+                    # Filter to tech-related posts
+                    for post in recent_posts:
+                        if 'tech_category' in post:
+                            category = post['tech_category']
+                            if category not in tech_posts:
+                                tech_posts[category] = []
+                            tech_posts[category].append(post)
+                        
+                            # Update last tech post time
+                            post_time = strip_timezone(datetime.fromisoformat(post['timestamp']))
+                            if post_time > last_tech_post:
+                                last_tech_post = post_time
+                except Exception as db_err:
+                    logger.logger.warning(f"Error retrieving tech posts: {str(db_err)}")
+                
+            # Analyze topics for candidacy
+            candidate_topics = []
+        
+            for topic in tech_topics:
+                category = topic['category']
+                posts_today = len(tech_posts.get(category, []))
+            
+                # Calculate last post for this category
+                category_last_post = last_tech_post
+                if category in tech_posts and tech_posts[category]:
+                    category_timestamps = [
+                        strip_timezone(datetime.fromisoformat(p['timestamp'])) 
+                        for p in tech_posts[category]
+                    ]
+                    if category_timestamps:
+                        category_last_post = max(category_timestamps)
+            
+                # Check if allowed to post about this category
+                allowed = self.config.is_tech_post_allowed(category, category_last_post)
+            
+                if allowed:
+                    # Prepare topic metadata
+                    topic_metadata = {
+                        'category': category,
+                        'priority': topic['priority'],
+                        'keywords': topic['keywords'][:5],  # Just first 5 for logging
+                        'posts_today': posts_today,
+                        'hours_since_last_post': safe_datetime_diff(datetime.now(), category_last_post) / 3600,
+                        'selected_token': self._select_token_for_tech_topic(category, market_data)
+                    }
+                
+                    # Add to candidates
+                    candidate_topics.append(topic_metadata)
+        
+            # Order by priority and recency
+            if candidate_topics:
+                candidate_topics.sort(key=lambda x: (x['priority'], x['hours_since_last_post']), reverse=True)
+                logger.logger.info(f"Found {len(candidate_topics)} tech topics eligible for posting")
+            
+                # Return analysis results
+                return {
+                    'enabled': True,
+                    'candidate_topics': candidate_topics,
+                    'tech_posts_today': sum(len(posts) for posts in tech_posts.values()),
+                    'max_daily_posts': self.config.TECH_CONTENT_CONFIG.get('max_daily_tech_posts', 6),
+                    'last_tech_post': last_tech_post
+                }
+            else:
+                logger.logger.info("No tech topics are currently eligible for posting")
+                return {
+                    'enabled': True,
+                    'candidate_topics': [],
+                    'tech_posts_today': sum(len(posts) for posts in tech_posts.values()),
+                    'max_daily_posts': self.config.TECH_CONTENT_CONFIG.get('max_daily_tech_posts', 6),
+                    'last_tech_post': last_tech_post
+                }
+        
+        except Exception as e:
+            logger.log_error("Tech Topic Analysis", str(e))
+            return {'enabled': False, 'error': str(e)}
+
+    def _select_token_for_tech_topic(self, tech_category: str, market_data: Dict[str, Any] = None) -> str:
+        """
+        Select an appropriate token to pair with a tech topic
+    
+        Args:
+            tech_category: Tech category for pairing
+            market_data: Market data for context
+        
+        Returns:
+            Selected token symbol
+        """
+        try:
+            if not market_data:
+                # Default to a popular token if no market data
+                return random.choice(['BTC', 'ETH', 'SOL'])
+            
+            # Define affinity between tech categories and tokens
+            tech_token_affinity = {
+                'ai': ['ETH', 'SOL', 'DOT'],          # Smart contract platforms
+                'quantum': ['BTC', 'XRP', 'AVAX'],    # Security-focused or scaling
+                'blockchain_tech': ['ETH', 'SOL', 'BNB', 'NEAR'],  # Advanced platforms
+                'advanced_computing': ['SOL', 'AVAX', 'DOT']  # High performance chains
+            }
+        
+            # Get affinity tokens for this category
+            affinity_tokens = tech_token_affinity.get(tech_category, self.reference_tokens)
+        
+            # Filter to tokens with available market data
+            available_tokens = [t for t in affinity_tokens if t in market_data]
+        
+            if not available_tokens:
+                # Fall back to reference tokens if no affinity tokens available
+                available_tokens = [t for t in self.reference_tokens if t in market_data]
+            
+            if not available_tokens:
+                # Last resort fallback
+                return random.choice(['BTC', 'ETH', 'SOL'])
+            
+            # Select token with interesting market movement if possible
+            interesting_tokens = []
+            for token in available_tokens:
+                price_change = abs(market_data[token].get('price_change_percentage_24h', 0))
+                if price_change > 5.0:  # >5% change is interesting
+                    interesting_tokens.append(token)
+                
+            # Use interesting tokens if available, otherwise use all available tokens
+            selection_pool = interesting_tokens if interesting_tokens else available_tokens
+        
+            # Select a token, weighting by market cap if possible
+            if len(selection_pool) > 1:
+                # Extract market caps
+                market_caps = {t: market_data[t].get('market_cap', 1) for t in selection_pool}
+                # Create weighted probability
+                total_cap = sum(market_caps.values())
+                weights = [market_caps[t]/total_cap for t in selection_pool]
+                # Select with weights
+                return random.choices(selection_pool, weights=weights, k=1)[0]
+            else:
+                # Just one token available
+                return selection_pool[0]
+            
+        except Exception as e:
+            logger.log_error("Token Selection for Tech Topic", str(e))
+            # Safe fallback
+            return random.choice(['BTC', 'ETH', 'SOL'])
+
+    def _generate_tech_content(self, tech_category: str, token: str, market_data: Dict[str, Any] = None) -> Tuple[str, Dict[str, Any]]:
+        """
+        Generate educational tech content for posting
+    
+        Args:
+            tech_category: Tech category to focus on
+            token: Token to relate to tech content
+            market_data: Market data for context
+        
+        Returns:
+            Tuple of (content_text, metadata)
+        """
+        try:
+            logger.logger.info(f"Generating tech content for {tech_category} related to {token}")
+        
+            # Get token data if available
+            token_data = {}
+            if market_data and token in market_data:
+                token_data = market_data[token]
+            
+            # Determine content type - integration or educational
+            integration_prob = 0.7  # 70% chance of integration content
+            is_integration = random.random() < integration_prob
+        
+            # Select appropriate audience level
+            audience_levels = ['beginner', 'intermediate', 'advanced']
+            audience_weights = [0.3, 0.5, 0.2]  # Bias toward intermediate
+            audience_level = random.choices(audience_levels, weights=audience_weights, k=1)[0]
+        
+            # Select appropriate template
+            template_type = 'integration_template' if is_integration else 'educational_template'
+            template = self.config.get_tech_prompt_template(template_type, audience_level)
+        
+            # Prepare prompt variables
+            prompt_vars = {
+                'tech_topic': tech_category.replace('_', ' ').title(),
+                'token': token,
+                'audience_level': audience_level,
+                'min_length': self.config.TWEET_CONSTRAINTS['MIN_LENGTH'],
+                'max_length': self.config.TWEET_CONSTRAINTS['MAX_LENGTH']
+            }
+        
+            if is_integration:
+                # Integration template - focus on connections
+                # Get token sentiment for mood
+                mood_words = ['enthusiastic', 'analytical', 'curious', 'balanced', 'thoughtful']
+                prompt_vars['mood'] = random.choice(mood_words)
+            
+                # Add token price data if available
+                if token_data:
+                    prompt_vars['token_price'] = token_data.get('current_price', 0)
+                    prompt_vars['price_change'] = token_data.get('price_change_percentage_24h', 0)
+                
+                # Get tech status summary
+                prompt_vars['tech_status'] = self._get_tech_status_summary(tech_category)
+                prompt_vars['integration_level'] = random.randint(3, 8)
+            
+                # Use tech analysis prompt template if we have market data
+                if token_data:
+                    prompt = self.config.client_TECH_ANALYSIS_PROMPT.format(
+                        tech_topic=prompt_vars['tech_topic'],
+                        token=token,
+                        price=token_data.get('current_price', 0),
+                        change=token_data.get('price_change_percentage_24h', 0),
+                        tech_status_summary=prompt_vars['tech_status'],
+                        integration_level=prompt_vars['integration_level'],
+                        audience_level=audience_level
+                    )
+                else:
+                    # Fall back to simpler template without market data
+                    prompt = template.format(**prompt_vars)
+                
+            else:
+                # Educational template - focus on informative content
+                # Generate key points for educational content
+                key_points = self._generate_tech_key_points(tech_category)
+                prompt_vars['key_point_1'] = key_points[0]
+                prompt_vars['key_point_2'] = key_points[1]
+                prompt_vars['key_point_3'] = key_points[2]
+                prompt_vars['learning_objective'] = self._generate_learning_objective(tech_category)
+            
+                # Format prompt with variables
+                prompt = template.format(**prompt_vars)
+        
+            # Generate content with LLM
+            logger.logger.debug(f"Generating {tech_category} content with {template_type}")
+            content = self.llm_provider.generate_text(prompt, max_tokens=1000)
+        
+            if not content:
+                raise ValueError("Failed to generate tech content")
+            
+            # Ensure content meets length requirements
+            content = self._format_tech_content(content)
+        
+            # Prepare metadata for storage
+            metadata = {
+                'tech_category': tech_category,
+                'token': token,
+                'is_integration': is_integration,
+                'audience_level': audience_level,
+                'template_type': template_type,
+                'token_data': token_data,
+                'timestamp': strip_timezone(datetime.now())
+            }
+        
+            return content, metadata
+        
+        except Exception as e:
+            logger.log_error("Tech Content Generation", str(e))
+            # Return fallback content
+            fallback_content = f"Did you know that advances in {tech_category.replace('_', ' ')} technology could significantly impact the future of {token} and the broader crypto ecosystem? The intersection of these fields is creating fascinating new possibilities."
+            return fallback_content, {'tech_category': tech_category, 'token': token, 'error': str(e)}
+
+    def _post_tech_content(self, content: str, metadata: Dict[str, Any]) -> bool:
+        """
+        Post tech content to Twitter with proper formatting
+    
+        Args:
+            content: Content to post
+            metadata: Content metadata for database storage
+        
+        Returns:
+            Boolean indicating if posting succeeded
+        """
+        try:
+            # Check if content is already properly formatted
+            if len(content) > self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH']:
+                content = self._format_tech_content(content)
+            
+            # Format as a tweet
+            tweet_text = content
+        
+            # Add a subtle educational hashtag if there's room
+            if len(tweet_text) < self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH'] - 20:
+                tech_category = metadata.get('tech_category', 'technology')
+                token = metadata.get('token', '')
+            
+                # Determine if we should add hashtags
+                if random.random() < 0.7:  # 70% chance to add hashtags
+                    # Potential hashtags
+                    tech_tags = {
+                        'ai': ['#AI', '#ArtificialIntelligence', '#MachineLearning'],
+                        'quantum': ['#QuantumComputing', '#Quantum', '#QuantumTech'],
+                        'blockchain_tech': ['#Blockchain', '#Web3', '#DLT'],
+                        'advanced_computing': ['#Computing', '#TechInnovation', '#FutureTech']
+                    }
+                
+                    # Get tech hashtags
+                    tech_hashtags = tech_tags.get(tech_category, ['#Technology', '#Innovation'])
+                
+                    # Add tech hashtag and token
+                    hashtag = random.choice(tech_hashtags)
+                    if len(tweet_text) + len(hashtag) + len(token) + 2 <= self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH']:
+                        tweet_text = f"{tweet_text} {hashtag}"
+                    
+                        # Maybe add token hashtag too
+                        if len(tweet_text) + len(token) + 2 <= self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH']:
+                            tweet_text = f"{tweet_text} #{token}"
+        
+            # Post to Twitter
+            logger.logger.info(f"Posting tech content about {metadata.get('tech_category', 'tech')} and {metadata.get('token', 'crypto')}")
+            if self._post_analysis(tweet_text):
+                logger.logger.info("Successfully posted tech content")
+            
+                # Record in database
+                if self.config.db:
+                    try:
+                        # Extract token price data if available
+                        token = metadata.get('token', '')
+                        token_data = metadata.get('token_data', {})
+                        price_data = {
+                            token: {
+                                'price': token_data.get('current_price', 0),
+                                'volume': token_data.get('volume', 0)
+                            }
+                        }
+                    
+                        # Store as content with tech category
+                        self.config.db.store_posted_content(
+                            content=tweet_text,
+                            sentiment={},  # No sentiment for educational content
+                            trigger_type=f"tech_{metadata.get('tech_category', 'general')}",
+                            price_data=price_data,
+                            meme_phrases={},  # No meme phrases for educational content
+                            tech_category=metadata.get('tech_category', 'technology'),
+                            tech_metadata=metadata,
+                            is_educational=True
+                        )
+                    except Exception as db_err:
+                        logger.logger.warning(f"Failed to store tech content: {str(db_err)}")
+            
+                return True
+            else:
+                logger.logger.warning("Failed to post tech content")
+                return False
+            
+        except Exception as e:
+            logger.log_error("Tech Content Posting", str(e))
+            return False
+
+    def _format_tech_content(self, content: str) -> str:
+        """
+        Format tech content to meet tweet constraints
+    
+        Args:
+            content: Raw content to format
+        
+        Returns:
+            Formatted content
+        """
+        # Ensure length is within constraints
+        if len(content) > self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH']:
+            # Find a good sentence break to truncate
+            last_period = content[:self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH'] - 3].rfind('.')
+            last_question = content[:self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH'] - 3].rfind('?')
+            last_exclamation = content[:self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH'] - 3].rfind('!')
+        
+            # Find best break point
+            break_point = max(last_period, last_question, last_exclamation)
+        
+            if break_point > self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH'] * 0.7:
+                # Good sentence break found
+                content = content[:break_point + 1]
+            else:
+                # Find word boundary
+                last_space = content[:self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH'] - 3].rfind(' ')
+                if last_space > 0:
+                    content = content[:last_space] + "..."
+                else:
+                    # Hard truncate with ellipsis
+                    content = content[:self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH'] - 3] + "..."
+    
+        # Ensure minimum length is met
+        if len(content) < self.config.TWEET_CONSTRAINTS['MIN_LENGTH']:
+            logger.logger.warning(f"Tech content too short ({len(content)} chars). Minimum: {self.config.TWEET_CONSTRAINTS['MIN_LENGTH']}")
+            # We won't try to expand too-short content
+    
+        return content
+
+    def _get_tech_status_summary(self, tech_category: str) -> str:
+        """
+        Get a current status summary for a tech category
+    
+        Args:
+            tech_category: Tech category
+        
+        Returns:
+            Status summary string
+        """
+        # Status summaries by category
+        summaries = {
+            'ai': [
+                "Rapid advancement in multimodal capabilities",
+                "Increasing deployment in enterprise settings",
+                "Rising concerns about governance and safety",
+                "Growing focus on specialized models",
+                "Shift toward open models and distributed research",
+                "Mainstream adoption accelerating"
+            ],
+            'quantum': [
+                "Steady progress in error correction",
+                "Growing number of qubits in leading systems",
+                "Early commercial applications emerging",
+                "Increasing focus on quantum-resistant cryptography",
+                "Major investment from government and private sectors",
+                "Hardware diversity expanding beyond superconducting qubits"
+            ],
+            'blockchain_tech': [
+                "Layer 2 solutions gaining momentum",
+                "ZK-rollup technology maturing rapidly",
+                "Cross-chain interoperability improving",
+                "RWA tokenization expanding use cases",
+                "Institutional adoption of infrastructure growing",
+                "Privacy-preserving technologies advancing"
+            ],
+            'advanced_computing': [
+                "Specialized AI hardware proliferating",
+                "Edge computing deployments accelerating",
+                "Neuromorphic computing showing early promise",
+                "Post-Moore's Law approaches diversifying",
+                "High-performance computing becoming more accessible",
+                "Increasing focus on energy efficiency"
+            ]
+        }
+    
+        # Get summaries for this category
+        category_summaries = summaries.get(tech_category, [
+            "Steady technological progress",
+            "Growing market adoption",
+            "Increasing integration with existing systems",
+            "Emerging commercial applications",
+            "Active research and development"
+        ])
+    
+        # Return random summary
+        return random.choice(category_summaries)
+
+    def _generate_tech_key_points(self, tech_category: str) -> List[str]:
+        """
+        Generate key educational points for a tech category
+    
+        Args:
+            tech_category: Tech category
+        
+        Returns:
+            List of key points for educational content
+        """
+        # Define key educational points by category
+        key_points = {
+            'ai': [
+                "How large language models process and generate human language",
+                "The difference between narrow AI and artificial general intelligence",
+                "How multimodal AI combines text, image, audio, and video processing",
+                "The concept of prompt engineering and its importance",
+                "The role of fine-tuning in customizing AI models",
+                "How AI models are trained on massive datasets",
+                "The emergence of specialized AI for different industries",
+                "The importance of ethical considerations in AI development",
+                "How AI models handle context and memory limitations",
+                "The computational resources required for modern AI systems"
+            ],
+            'quantum': [
+                "How quantum bits (qubits) differ from classical bits",
+                "The concept of quantum superposition and entanglement",
+                "Why quantum computing excels at certain types of problems",
+                "The challenge of quantum error correction",
+                "Different physical implementations of quantum computers",
+                "How quantum algorithms provide computational advantages",
+                "The potential impact on cryptography and security",
+                "The timeline for quantum advantage in practical applications",
+                "How quantum computing complements rather than replaces classical computing",
+                "The difference between quantum annealing and gate-based quantum computing"
+            ],
+            'blockchain_tech': [
+                "How zero-knowledge proofs enable privacy while maintaining verification",
+                "The concept of sharding and its role in blockchain scaling",
+                "The difference between optimistic and ZK rollups",
+                "How Layer 2 solutions address blockchain scalability challenges",
+                "The evolution of consensus mechanisms beyond proof of work",
+                "How cross-chain bridges enable interoperability between blockchains",
+                "The concept of state channels for off-chain transactions",
+                "How smart contracts enable programmable transactions",
+                "The role of oracles in connecting blockchains to external data",
+                "Different approaches to blockchain governance"
+            ],
+            'advanced_computing': [
+                "How neuromorphic computing mimics brain functions",
+                "The concept of edge computing and its advantages",
+                "The evolution beyond traditional Moore's Law scaling",
+                "How specialized hardware accelerates specific workloads",
+                "The rise of heterogeneous computing architectures",
+                "How in-memory computing reduces data movement bottlenecks",
+                "The potential of optical computing for specific applications",
+                "How quantum-inspired algorithms work on classical hardware",
+                "The importance of energy efficiency in modern computing",
+                "How cloud computing is evolving with specialized hardware"
+            ]
+        }
+    
+        # Get points for this category
+        category_points = key_points.get(tech_category, [
+            "The fundamental principles behind this technology",
+            "Current applications and use cases",
+            "Future potential developments and challenges",
+            "How this technology relates to blockchain and cryptocurrency",
+            "The importance of this technology for digital innovation"
+        ])
+    
+        # Select 3 random points without replacement
+        selected_points = random.sample(category_points, min(3, len(category_points)))
+    
+        # Ensure we have 3 points
+        while len(selected_points) < 3:
+            selected_points.append("How this technology impacts the future of digital assets")
+        
+        return selected_points
+
+    def _generate_learning_objective(self, tech_category: str) -> str:
+        """
+        Generate a learning objective for educational tech content
+    
+        Args:
+            tech_category: Tech category
+        
+        Returns:
+            Learning objective string
+        """
+        # Define learning objectives by category
+        objectives = {
+            'ai': [
+                "how AI technologies are transforming the crypto landscape",
+                "the core principles behind modern AI systems",
+                "how AI and blockchain technologies can complement each other",
+                "the key limitations and challenges of current AI approaches",
+                "how AI is being used to enhance trading, security, and analytics in crypto"
+            ],
+            'quantum': [
+                "how quantum computing affects blockchain security",
+                "the fundamentals of quantum computing in accessible terms",
+                "the timeline and implications of quantum advances for cryptography",
+                "how the crypto industry is preparing for quantum computing",
+                "the difference between quantum threats and opportunities for blockchain"
+            ],
+            'blockchain_tech': [
+                "how advanced blockchain technologies are addressing scalability",
+                "the technical foundations of modern blockchain systems",
+                "the trade-offs between different blockchain scaling approaches",
+                "how blockchain privacy technologies actually work",
+                "the evolution of blockchain architecture beyond first-generation systems"
+            ],
+            'advanced_computing': [
+                "how specialized computing hardware is changing crypto mining",
+                "the next generation of computing technologies on the horizon",
+                "how computing advances are enabling new blockchain capabilities",
+                "the relationship between energy efficiency and blockchain sustainability",
+                "how distributed computing and blockchain share foundational principles"
+            ]
+        }
+    
+        # Get objectives for this category
+        category_objectives = objectives.get(tech_category, [
+            "the fundamentals of this technology in accessible terms",
+            "how this technology relates to blockchain and cryptocurrency",
+            "the potential future impact of this technological development",
+            "the current state and challenges of this technology",
+            "how this technology might transform digital finance"
+        ])
+    
+        # Return random objective
+        return random.choice(category_objectives)
+
+    @ensure_naive_datetimes
+    def _should_post_tech_content(self, market_data: Dict[str, Any] = None) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Determine if tech content should be posted, and select a topic
+    
+        Args:
+            market_data: Optional market data for context
+        
+        Returns:
+            Tuple of (should_post, topic_data)
+        """
+        try:
+            # Check if tech content is enabled
+            if not self.config.TECH_CONTENT_CONFIG.get('enabled', False):
+                return False, {}
+            
+            # Analyze tech topics
+            tech_analysis = self._analyze_tech_topics(market_data)
+        
+            if not tech_analysis.get('enabled', False):
+                return False, {}
+            
+            # Check if we've hit daily maximum
+            if tech_analysis.get('tech_posts_today', 0) >= tech_analysis.get('max_daily_posts', 6):
+                logger.logger.info(f"Maximum daily tech posts reached ({tech_analysis.get('tech_posts_today')}/{tech_analysis.get('max_daily_posts')})")
+                return False, {}
+            
+            # Check if we have candidate topics
+            candidates = tech_analysis.get('candidate_topics', [])
+            if not candidates:
+                return False, {}
+            
+            # Select top candidate
+            selected_topic = candidates[0]
+        
+            # Check if enough time has passed since last tech post
+            last_tech_post = tech_analysis.get('last_tech_post', strip_timezone(datetime.now() - timedelta(days=1)))
+            hours_since_last = safe_datetime_diff(datetime.now(), last_tech_post) / 3600
+            post_frequency = self.config.TECH_CONTENT_CONFIG.get('post_frequency', 4)
+        
+            if hours_since_last < post_frequency:
+                logger.logger.info(f"Not enough time since last tech post ({hours_since_last:.1f}h < {post_frequency}h)")
+                return False, selected_topic
+            
+            # At this point, we should post tech content
+            logger.logger.info(f"Will post tech content about {selected_topic['category']} related to {selected_topic['selected_token']}")
+            return True, selected_topic
+        
+        except Exception as e:
+            logger.log_error("Tech Content Decision", str(e))
+            return False, {}
+
+    def _post_tech_educational_content(self, market_data: Dict[str, Any]) -> bool:
+        """
+        Generate and post tech educational content
+    
+        Args:
+            market_data: Market data for context
+        
+        Returns:
+            Boolean indicating if content was successfully posted
+        """
+        try:
+            # Check if we should post tech content
+            should_post, topic_data = self._should_post_tech_content(market_data)
+        
+            if not should_post:
+                return False
+            
+            # Generate tech content
+            tech_category = topic_data.get('category', 'ai')  # Default to AI if not specified
+            token = topic_data.get('selected_token', 'BTC')   # Default to BTC if not specified
+        
+            content, metadata = self._generate_tech_content(tech_category, token, market_data)
+        
+            # Post the content
+            return self._post_tech_content(content, metadata)
+        
+        except Exception as e:
+            logger.log_error("Tech Educational Content", str(e))
+            return False
+
     def _select_best_token_for_timeframe(self, market_data: Dict[str, Any], timeframe: str) -> Optional[str]:
         """
         Select the best token to use for a specific timeframe post
         Uses momentum scoring, prediction accuracy, and market activity
+        
+        Args:
+            market_data: Market data dictionary
+            timeframe: Timeframe to select for
+            
+        Returns:
+            Best token symbol for the timeframe
         """
         candidates = []
         
@@ -939,7 +2002,7 @@ class CryptoAnalysisBot:
         # Score each token
         for token in available_tokens:
             # Calculate momentum score
-            momentum_score = self._calculate_momentum_score(token, market_data)
+            momentum_score = self._calculate_momentum_score(token, market_data, timeframe)
             
             # Calculate activity score based on recent volume and price changes
             token_data = market_data.get(token, {})
@@ -948,8 +2011,8 @@ class CryptoAnalysisBot:
             
             # Get volume trend
             volume_trend, _ = self._analyze_volume_trend(volume, 
-                                                     self._get_historical_volume_data(token, timeframe=timeframe),
-                                                     timeframe=timeframe)
+                                                    self._get_historical_volume_data(token, timeframe=timeframe),
+                                                    timeframe=timeframe)
             
             # Get historical prediction accuracy
             perf_stats = self.config.db.get_prediction_performance(token=token, timeframe=timeframe)
@@ -977,16 +2040,18 @@ class CryptoAnalysisBot:
                 recency_score = 100
             else:
                 # Calculate hours since last post
-                last_post_time = max(p.get('timestamp', datetime.min) for p in token_posts)
-                hours_since = safe_datetime_diff(datetime.now(), last_post_time) / 3600
-                
-                # Scale recency score based on timeframe
-                if timeframe == "1h":
-                    recency_score = min(100, hours_since * 10)  # Max score after 10 hours
-                elif timeframe == "24h":
-                    recency_score = min(100, hours_since * 2)   # Max score after 50 hours
-                else:  # 7d
-                    recency_score = min(100, hours_since * 0.5)  # Max score after 200 hours
+                last_posts_times = [strip_timezone(datetime.fromisoformat(p.get('timestamp', datetime.min.isoformat()))) for p in token_posts]
+                if last_posts_times:
+                    last_post_time = max(last_posts_times)
+                    hours_since = safe_datetime_diff(datetime.now(), last_post_time) / 3600
+                    
+                    # Scale recency score based on timeframe
+                    if timeframe == "1h":
+                        recency_score = min(100, hours_since * 10)  # Max score after 10 hours
+                    elif timeframe == "24h":
+                        recency_score = min(100, hours_since * 2)   # Max score after 50 hours
+                    else:  # 7d
+                        recency_score = min(100, hours_since * 0.5)  # Max score after 200 hours
             
             # Combine scores with timeframe-specific weightings
             if timeframe == "1h":
@@ -1026,22 +2091,26 @@ class CryptoAnalysisBot:
         
         return candidates[0][0] if candidates else None
 
-    # Method for handling replies
     def _check_for_posts_to_reply(self, market_data: Dict[str, Any]) -> bool:
         """
         Check for posts to reply to and generate replies
-        Returns True if any replies were posted
+        
+        Args:
+            market_data: Market data dictionary
+            
+        Returns:
+            Boolean indicating if any replies were posted
         """
-        now = datetime.now()
+        now = strip_timezone(datetime.now())
     
         # Check if it's time to look for posts to reply to
-        time_since_last_check = (now - self.last_reply_check).total_seconds() / 300
+        time_since_last_check = safe_datetime_diff(now, self.last_reply_check) / 60
         if time_since_last_check < self.reply_check_interval:
             logger.logger.debug(f"Skipping reply check, {time_since_last_check:.1f} minutes since last check (interval: {self.reply_check_interval})")
             return False
         
         # Also check cooldown period
-        time_since_last_reply = (now - self.last_reply_time).total_seconds() / 300
+        time_since_last_reply = safe_datetime_diff(now, self.last_reply_time) / 60
         if time_since_last_reply < self.reply_cooldown:
             logger.logger.debug(f"In reply cooldown period, {time_since_last_reply:.1f} minutes since last reply (cooldown: {self.reply_cooldown})")
             return False
@@ -1060,7 +2129,7 @@ class CryptoAnalysisBot:
 
             # Log sample posts for debugging
             for i, post in enumerate(posts[:3]):  # Log first 3 posts
-                logger.logger.info(f"Sample post {i}: {post.get('content', '')[:100]}...")
+                logger.logger.info(f"Sample post {i}: {post.get('text', '')[:100]}...")
 
             # Find market-related posts
             logger.logger.info(f"Finding market-related posts among {len(posts)} scraped posts")
@@ -1072,7 +2141,7 @@ class CryptoAnalysisBot:
             logger.logger.info(f"Found {len(unreplied_posts)} unreplied market-related posts")
             if unreplied_posts:
                 for i, post in enumerate(unreplied_posts[:3]):
-                    logger.logger.info(f"Sample unreplied post {i}: {post.get('content', '')[:100]}...")
+                    logger.logger.info(f"Sample unreplied post {i}: {post.get('text', '')[:100]}...")
             
             if not unreplied_posts:
                 return False
@@ -1099,126 +2168,146 @@ class CryptoAnalysisBot:
             logger.log_error("Check For Posts To Reply", str(e))
             return False
 
+    @ensure_naive_datetimes
     def _cleanup(self) -> None:
-       """Cleanup resources and save state"""
-       try:
-           # Stop prediction thread if running
-           if self.prediction_thread_running:
-               self.prediction_thread_running = False
-               if self.prediction_thread and self.prediction_thread.is_alive():
-                   self.prediction_thread.join(timeout=5)
-               logger.logger.info("Stopped prediction thread")
+        """Cleanup resources and save state"""
+        try:
+            # Stop prediction thread if running
+            if self.prediction_thread_running:
+                self.prediction_thread_running = False
+                if self.prediction_thread and self.prediction_thread.is_alive():
+                    self.prediction_thread.join(timeout=5)
+                logger.logger.info("Stopped prediction thread")
            
-           # Close browser
-           if self.browser:
-               logger.logger.info("Closing browser...")
-               try:
-                   self.browser.close_browser()
-                   time.sleep(1)
-               except Exception as e:
-                   logger.logger.warning(f"Error during browser close: {str(e)}")
+            # Close browser
+            if self.browser:
+                logger.logger.info("Closing browser...")
+                try:
+                    self.browser.close_browser()
+                    time.sleep(1)
+                except Exception as e:
+                    logger.logger.warning(f"Error during browser close: {str(e)}")
            
-           # Save timeframe prediction data to database for persistence
-           try:
-               timeframe_state = {
-                   "predictions": self.timeframe_predictions,
-                   "last_post": {tf: ts.isoformat() for tf, ts in self.timeframe_last_post.items()},
-                   "next_scheduled": {tf: ts.isoformat() for tf, ts in self.next_scheduled_posts.items()},
-                   "accuracy": self.prediction_accuracy
-               }
+            # Save timeframe prediction data to database for persistence
+            try:
+                timeframe_state = {
+                    "predictions": self.timeframe_predictions,
+                    "last_post": {tf: ts.isoformat() for tf, ts in self.timeframe_last_post.items()},
+                    "next_scheduled": {tf: ts.isoformat() for tf, ts in self.next_scheduled_posts.items()},
+                    "accuracy": self.prediction_accuracy
+                }
                
-               # Store using the generic JSON data storage
-               self.config.db._store_json_data(
-                   data_type="timeframe_state",
-                   data=timeframe_state
-               )
-               logger.logger.info("Saved timeframe state to database")
-           except Exception as e:
-               logger.logger.warning(f"Failed to save timeframe state: {str(e)}")
+                # Store using the generic JSON data storage
+                self.config.db._store_json_data(
+                    data_type="timeframe_state",
+                    data=timeframe_state
+                )
+                logger.logger.info("Saved timeframe state to database")
+            except Exception as e:
+                logger.logger.warning(f"Failed to save timeframe state: {str(e)}")
            
-           # Close database connection
-           if self.config:
-               self.config.cleanup()
+            # Close database connection
+            if self.config:
+                self.config.cleanup()
                
-           logger.log_shutdown()
-       except Exception as e:
-           logger.log_error("Cleanup", str(e))
+            logger.log_shutdown()
+        except Exception as e:
+            logger.log_error("Cleanup", str(e))
 
-    def _ensure_datetime(self, value):
-        """Convert value to datetime if it's a string"""
+    @ensure_naive_datetimes
+    def _ensure_datetime(self, value) -> datetime:
+        """
+        Convert value to datetime if it's a string, ensuring timezone-naive datetime
+        
+        Args:
+            value: Value to convert
+            
+        Returns:
+            Datetime object (timezone-naive)
+        """
         if isinstance(value, str):
             try:
-                return datetime.fromisoformat(value)
+                dt = datetime.fromisoformat(value)
+                return strip_timezone(dt)
             except ValueError:
-                return datetime.min
-        return value
+                logger.logger.warning(f"Could not parse datetime string: {value}")
+                return strip_timezone(datetime.min)
+        elif isinstance(value, datetime):
+            return strip_timezone(value)
+        return strip_timezone(datetime.min)
 
     def _get_crypto_data(self) -> Optional[Dict[str, Any]]:
-       """Fetch crypto data from CoinGecko with retries"""
-       try:
-           params = {
-               **self.config.get_coingecko_params(),
-               'ids': ','.join(self.target_chains.values()), 
-               'sparkline': True 
-           }
-           
-           data = self.coingecko.get_market_data(params)
-           if not data:
-               logger.logger.error("Failed to fetch market data from CoinGecko")
-               return None
-               
-           formatted_data = {
-               coin['symbol'].upper(): {
-                   'current_price': coin['current_price'],
-                   'volume': coin['total_volume'],
-                   'price_change_percentage_24h': coin['price_change_percentage_24h'],
-                   'sparkline': coin.get('sparkline_in_7d', {}).get('price', []),
-                   'market_cap': coin['market_cap'],
-                   'market_cap_rank': coin['market_cap_rank'],
-                   'total_supply': coin.get('total_supply'),
-                   'max_supply': coin.get('max_supply'),
-                   'circulating_supply': coin.get('circulating_supply'),
-                   'ath': coin.get('ath'),
-                   'ath_change_percentage': coin.get('ath_change_percentage')
-               } for coin in data
-           }
-           
-           # Map to correct symbol if needed (particularly for POL which might return as MATIC)
-           symbol_corrections = {'MATIC': 'POL'}
-           for old_sym, new_sym in symbol_corrections.items():
-               if old_sym in formatted_data and new_sym not in formatted_data:
-                   formatted_data[new_sym] = formatted_data[old_sym]
-                   logger.logger.debug(f"Mapped {old_sym} data to {new_sym}")
-           
-           # Log API usage statistics
-           stats = self.coingecko.get_request_stats()
-           logger.logger.debug(
-               f"CoinGecko API stats - Daily requests: {stats['daily_requests']}, "
-               f"Failed: {stats['failed_requests']}, Cache size: {stats['cache_size']}"
-           )
-           
-           # Store market data in database
-           for chain, chain_data in formatted_data.items():
-               self.config.db.store_market_data(chain, chain_data)
-           
-           # Check if all data was retrieved
-           missing_tokens = [token for token in self.reference_tokens if token not in formatted_data]
-           if missing_tokens:
-               logger.logger.warning(f"Missing data for tokens: {', '.join(missing_tokens)}")
-               
-               # Try fallback mechanism for missing tokens
-               if 'POL' in missing_tokens and 'MATIC' in formatted_data:
-                   formatted_data['POL'] = formatted_data['MATIC']
-                   missing_tokens.remove('POL')
-                   logger.logger.info("Applied fallback for POL using MATIC data")
-               
-           logger.logger.info(f"Successfully fetched crypto data for {', '.join(formatted_data.keys())}")
-           return formatted_data
-               
-       except Exception as e:
-           logger.log_error("CoinGecko API", str(e))
-           return None
+        """
+        Fetch crypto data from CoinGecko with retries
+        
+        Returns:
+            Market data dictionary or None if failed
+        """
+        try:
+            params = {
+                **self.config.get_coingecko_params(),
+                'ids': ','.join(self.target_chains.values()), 
+                'sparkline': True 
+            }
+            
+            data = self.coingecko.get_market_data(params)
+            if not data:
+                logger.logger.error("Failed to fetch market data from CoinGecko")
+                return None
+                
+            formatted_data = {
+                coin['symbol'].upper(): {
+                    'current_price': coin['current_price'],
+                    'volume': coin['total_volume'],
+                    'price_change_percentage_24h': coin['price_change_percentage_24h'],
+                    'sparkline': coin.get('sparkline_in_7d', {}).get('price', []),
+                    'market_cap': coin['market_cap'],
+                    'market_cap_rank': coin['market_cap_rank'],
+                    'total_supply': coin.get('total_supply'),
+                    'max_supply': coin.get('max_supply'),
+                    'circulating_supply': coin.get('circulating_supply'),
+                    'ath': coin.get('ath'),
+                    'ath_change_percentage': coin.get('ath_change_percentage')
+                } for coin in data
+            }
+            
+            # Map to correct symbol if needed (particularly for POL which might return as MATIC)
+            symbol_corrections = {'MATIC': 'POL'}
+            for old_sym, new_sym in symbol_corrections.items():
+                if old_sym in formatted_data and new_sym not in formatted_data:
+                    formatted_data[new_sym] = formatted_data[old_sym]
+                    logger.logger.debug(f"Mapped {old_sym} data to {new_sym}")
+            
+            # Log API usage statistics
+            stats = self.coingecko.get_request_stats()
+            logger.logger.debug(
+                f"CoinGecko API stats - Daily requests: {stats['daily_requests']}, "
+                f"Failed: {stats['failed_requests']}, Cache size: {stats['cache_size']}"
+            )
+            
+            # Store market data in database
+            for chain, chain_data in formatted_data.items():
+                self.config.db.store_market_data(chain, chain_data)
+            
+            # Check if all data was retrieved
+            missing_tokens = [token for token in self.reference_tokens if token not in formatted_data]
+            if missing_tokens:
+                logger.logger.warning(f"Missing data for tokens: {', '.join(missing_tokens)}")
+                
+                # Try fallback mechanism for missing tokens
+                if 'POL' in missing_tokens and 'MATIC' in formatted_data:
+                    formatted_data['POL'] = formatted_data['MATIC']
+                    missing_tokens.remove('POL')
+                    logger.logger.info("Applied fallback for POL using MATIC data")
+                
+            logger.logger.info(f"Successfully fetched crypto data for {', '.join(formatted_data.keys())}")
+            return formatted_data
+                
+        except Exception as e:
+            logger.log_error("CoinGecko API", str(e))
+            return None
 
+    @ensure_naive_datetimes
     def _load_saved_timeframe_state(self) -> None:
         """Load previously saved timeframe state from database with enhanced datetime handling"""
         try:
@@ -1305,166 +2394,189 @@ class CryptoAnalysisBot:
             logger.logger.warning("Using default timeframe state due to error")
 
     def _get_historical_price_data(self, chain: str, hours: int = None, timeframe: str = "1h") -> List[Dict[str, Any]]:
-       """
-       Get historical price data for the specified time period
-       Adjusted based on timeframe for appropriate historical context
-       """
-       try:
-           # Adjust time period based on timeframe if not specified
-           if hours is None:
-               if timeframe == "1h":
-                   hours = 24  # Last 24 hours for hourly predictions
-               elif timeframe == "24h":
-                   hours = 7 * 24  # Last 7 days for daily predictions
-               elif timeframe == "7d":
-                   hours = 30 * 24  # Last 30 days for weekly predictions
-               else:
-                   hours = 24
-           
-           # Query the database
-           return self.config.db.get_recent_market_data(chain, hours)
-           
-       except Exception as e:
-           logger.log_error(f"Historical Price Data - {chain} ({timeframe})", str(e))
-           return []
+        """
+        Get historical price data for the specified time period
+        Adjusted based on timeframe for appropriate historical context
+        
+        Args:
+            chain: Token/chain symbol
+            hours: Number of hours of historical data to retrieve
+            timeframe: Timeframe for the data (1h, 24h, 7d)
+            
+        Returns:
+            List of historical price data points
+        """
+        try:
+            # Adjust time period based on timeframe if not specified
+            if hours is None:
+                if timeframe == "1h":
+                    hours = 24  # Last 24 hours for hourly predictions
+                elif timeframe == "24h":
+                    hours = 7 * 24  # Last 7 days for daily predictions
+                elif timeframe == "7d":
+                    hours = 30 * 24  # Last 30 days for weekly predictions
+                else:
+                    hours = 24
+            
+            # Query the database
+            return self.config.db.get_recent_market_data(chain, hours)
+            
+        except Exception as e:
+            logger.log_error(f"Historical Price Data - {chain} ({timeframe})", str(e))
+            return []
    
+    @ensure_naive_datetimes
     def _get_token_timeframe_performance(self, token: str) -> Dict[str, Dict[str, Any]]:
-       """
-       Get prediction performance statistics for a token across all timeframes
-       """
-       try:
-           result = {}
-           
-           # Gather performance for each timeframe
-           for timeframe in self.timeframes:
-               perf_stats = self.config.db.get_prediction_performance(token=token, timeframe=timeframe)
-               
-               if perf_stats:
-                   result[timeframe] = {
-                       "accuracy": perf_stats[0].get("accuracy_rate", 0),
-                       "total": perf_stats[0].get("total_predictions", 0),
-                       "correct": perf_stats[0].get("correct_predictions", 0),
-                       "avg_deviation": perf_stats[0].get("avg_deviation", 0)
-                   }
-               else:
-                   result[timeframe] = {
-                       "accuracy": 0,
-                       "total": 0,
-                       "correct": 0,
-                       "avg_deviation": 0
-                   }
-           
-           # Get cross-timeframe comparison
-           cross_comparison = self.config.db.get_prediction_comparison_across_timeframes(token)
-           
-           if cross_comparison:
-               result["best_timeframe"] = cross_comparison.get("best_timeframe", {}).get("timeframe", "1h")
-               result["overall"] = cross_comparison.get("overall", {})
-           
-           return result
-           
-       except Exception as e:
-           logger.log_error(f"Get Token Timeframe Performance - {token}", str(e))
-           return {tf: {"accuracy": 0, "total": 0, "correct": 0, "avg_deviation": 0} for tf in self.timeframes}
+        """
+        Get prediction performance statistics for a token across all timeframes
+        
+        Args:
+            token: Token symbol
+            
+        Returns:
+            Dictionary of performance statistics by timeframe
+        """
+        try:
+            result = {}
+            
+            # Gather performance for each timeframe
+            for timeframe in self.timeframes:
+                perf_stats = self.config.db.get_prediction_performance(token=token, timeframe=timeframe)
+                
+                if perf_stats:
+                    result[timeframe] = {
+                        "accuracy": perf_stats[0].get("accuracy_rate", 0),
+                        "total": perf_stats[0].get("total_predictions", 0),
+                        "correct": perf_stats[0].get("correct_predictions", 0),
+                        "avg_deviation": perf_stats[0].get("avg_deviation", 0)
+                    }
+                else:
+                    result[timeframe] = {
+                        "accuracy": 0,
+                        "total": 0,
+                        "correct": 0,
+                        "avg_deviation": 0
+                    }
+            
+            # Get cross-timeframe comparison
+            cross_comparison = self.config.db.get_prediction_comparison_across_timeframes(token)
+            
+            if cross_comparison:
+                result["best_timeframe"] = cross_comparison.get("best_timeframe", {}).get("timeframe", "1h")
+                result["overall"] = cross_comparison.get("overall", {})
+            
+            return result
+            
+        except Exception as e:
+            logger.log_error(f"Get Token Timeframe Performance - {token}", str(e))
+            return {tf: {"accuracy": 0, "total": 0, "correct": 0, "avg_deviation": 0} for tf in self.timeframes}
    
+    @ensure_naive_datetimes
     def _get_all_active_predictions(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
-       """
-       Get all active predictions organized by timeframe and token
-       """
-       try:
-           result = {tf: {} for tf in self.timeframes}
-           
-           # Get active predictions from the database
-           active_predictions = self.config.db.get_active_predictions()
-           
-           for prediction in active_predictions:
-               timeframe = prediction.get("timeframe", "1h")
-               token = prediction.get("token", "")
-               
-               if timeframe in result and token:
-                   result[timeframe][token] = prediction
-           
-           # Merge with in-memory predictions which might be more recent
-           for timeframe, predictions in self.timeframe_predictions.items():
-               for token, prediction in predictions.items():
-                   result.setdefault(timeframe, {})[token] = prediction
-           
-           return result
-           
-       except Exception as e:
-           logger.log_error("Get All Active Predictions", str(e))
-           return {tf: {} for tf in self.timeframes}
+        """
+        Get all active predictions organized by timeframe and token
+        
+        Returns:
+            Dictionary of active predictions by timeframe and token
+        """
+        try:
+            result = {tf: {} for tf in self.timeframes}
+            
+            # Get active predictions from the database
+            active_predictions = self.config.db.get_active_predictions()
+            
+            for prediction in active_predictions:
+                timeframe = prediction.get("timeframe", "1h")
+                token = prediction.get("token", "")
+                
+                if timeframe in result and token:
+                    result[timeframe][token] = prediction
+            
+            # Merge with in-memory predictions which might be more recent
+            for timeframe, predictions in self.timeframe_predictions.items():
+                for token, prediction in predictions.items():
+                    result.setdefault(timeframe, {})[token] = prediction
+            
+            return result
+            
+        except Exception as e:
+            logger.log_error("Get All Active Predictions", str(e))
+            return {tf: {} for tf in self.timeframes}
 
+    @ensure_naive_datetimes
     def _evaluate_expired_timeframe_predictions(self) -> Dict[str, int]:
-       """
-       Find and evaluate expired predictions across all timeframes
-       Returns count of evaluated predictions by timeframe
-       """
-       try:
-           # Get expired unevaluated predictions
-           all_expired = self.config.db.get_expired_unevaluated_predictions()
-           
-           if not all_expired:
-               logger.logger.debug("No expired predictions to evaluate")
-               return {tf: 0 for tf in self.timeframes}
-               
-           # Group by timeframe
-           expired_by_timeframe = {tf: [] for tf in self.timeframes}
-           
-           for prediction in all_expired:
-               timeframe = prediction.get("timeframe", "1h")
-               if timeframe in expired_by_timeframe:
-                   expired_by_timeframe[timeframe].append(prediction)
-           
-           # Get current market data for evaluation
-           market_data = self._get_crypto_data()
-           if not market_data:
-               logger.logger.error("Failed to fetch market data for prediction evaluation")
-               return {tf: 0 for tf in self.timeframes}
-           
-           # Track evaluated counts
-           evaluated_counts = {tf: 0 for tf in self.timeframes}
-           
-           # Evaluate each prediction by timeframe
-           for timeframe, predictions in expired_by_timeframe.items():
-               for prediction in predictions:
-                   token = prediction["token"]
-                   prediction_id = prediction["id"]
-                   
-                   # Get current price for the token
-                   token_data = market_data.get(token, {})
-                   if not token_data:
-                       logger.logger.warning(f"No current price data for {token}, skipping evaluation")
-                       continue
-                       
-                   current_price = token_data.get("current_price", 0)
-                   if current_price == 0:
-                       logger.logger.warning(f"Zero price for {token}, skipping evaluation")
-                       continue
-                       
-                   # Record the outcome
-                   result = self.config.db.record_prediction_outcome(prediction_id, current_price)
-                   
-                   if result:
-                       logger.logger.debug(f"Evaluated {timeframe} prediction {prediction_id} for {token}")
-                       evaluated_counts[timeframe] += 1
-                   else:
-                       logger.logger.error(f"Failed to evaluate {timeframe} prediction {prediction_id} for {token}")
-           
-           # Log evaluation summaries
-           for timeframe, count in evaluated_counts.items():
-               if count > 0:
-                   logger.logger.info(f"Evaluated {count} expired {timeframe} predictions")
-           
-           # Update prediction performance metrics
-           self._update_prediction_performance_metrics()
-           
-           return evaluated_counts
-           
-       except Exception as e:
-           logger.log_error("Evaluate Expired Timeframe Predictions", str(e))
-           return {tf: 0 for tf in self.timeframes}
+        """
+        Find and evaluate expired predictions across all timeframes
+        
+        Returns:
+            Dictionary with count of evaluated predictions by timeframe
+        """
+        try:
+            # Get expired unevaluated predictions
+            all_expired = self.config.db.get_expired_unevaluated_predictions()
+            
+            if not all_expired:
+                logger.logger.debug("No expired predictions to evaluate")
+                return {tf: 0 for tf in self.timeframes}
+                
+            # Group by timeframe
+            expired_by_timeframe = {tf: [] for tf in self.timeframes}
+            
+            for prediction in all_expired:
+                timeframe = prediction.get("timeframe", "1h")
+                if timeframe in expired_by_timeframe:
+                    expired_by_timeframe[timeframe].append(prediction)
+            
+            # Get current market data for evaluation
+            market_data = self._get_crypto_data()
+            if not market_data:
+                logger.logger.error("Failed to fetch market data for prediction evaluation")
+                return {tf: 0 for tf in self.timeframes}
+            
+            # Track evaluated counts
+            evaluated_counts = {tf: 0 for tf in self.timeframes}
+            
+            # Evaluate each prediction by timeframe
+            for timeframe, predictions in expired_by_timeframe.items():
+                for prediction in predictions:
+                    token = prediction["token"]
+                    prediction_id = prediction["id"]
+                    
+                    # Get current price for the token
+                    token_data = market_data.get(token, {})
+                    if not token_data:
+                        logger.logger.warning(f"No current price data for {token}, skipping evaluation")
+                        continue
+                        
+                    current_price = token_data.get("current_price", 0)
+                    if current_price == 0:
+                        logger.logger.warning(f"Zero price for {token}, skipping evaluation")
+                        continue
+                        
+                    # Record the outcome
+                    result = self.config.db.record_prediction_outcome(prediction_id, current_price)
+                    
+                    if result:
+                        logger.logger.debug(f"Evaluated {timeframe} prediction {prediction_id} for {token}")
+                        evaluated_counts[timeframe] += 1
+                    else:
+                        logger.logger.error(f"Failed to evaluate {timeframe} prediction {prediction_id} for {token}")
+            
+            # Log evaluation summaries
+            for timeframe, count in evaluated_counts.items():
+                if count > 0:
+                    logger.logger.info(f"Evaluated {count} expired {timeframe} predictions")
+            
+            # Update prediction performance metrics
+            self._update_prediction_performance_metrics()
+            
+            return evaluated_counts
+            
+        except Exception as e:
+            logger.log_error("Evaluate Expired Timeframe Predictions", str(e))
+            return {tf: 0 for tf in self.timeframes}
 
+    @ensure_naive_datetimes
     def _update_prediction_performance_metrics(self) -> None:
         """Update in-memory prediction performance metrics from database"""
         try:
@@ -1494,7 +2606,14 @@ class CryptoAnalysisBot:
                              timeframe: str = "1h") -> Tuple[float, str]:
         """
         Analyze volume trend over the window period, adjusted for timeframe
-        Returns (percentage_change, trend_description)
+        
+        Args:
+            current_volume: Current volume value
+            historical_data: Historical volume data
+            timeframe: Timeframe for analysis
+            
+        Returns:
+            Tuple of (percentage_change, trend_description)
         """
         if not historical_data:
             return 0.0, "insufficient_data"
@@ -1542,11 +2661,722 @@ class CryptoAnalysisBot:
             logger.log_error(f"Volume Trend Analysis - {timeframe}", str(e))
             return 0.0, "error"
 
+    @ensure_naive_datetimes
+    def _generate_weekly_summary(self) -> bool:
+        """
+        Generate and post a weekly summary of predictions and performance across all timeframes
+        
+        Returns:
+            Boolean indicating if summary was successfully posted
+        """
+        try:
+            # Check if it's Sunday (weekday 6) and around midnight
+            now = strip_timezone(datetime.now())
+            if now.weekday() != 6 or now.hour != 0:
+                return False
+                
+            # Get performance stats for all timeframes
+            overall_stats = {}
+            for timeframe in self.timeframes:
+                performance_stats = self.config.db.get_prediction_performance(timeframe=timeframe)
+                
+                if not performance_stats:
+                    continue
+                    
+                # Calculate overall stats for this timeframe
+                total_correct = sum(p["correct_predictions"] for p in performance_stats)
+                total_predictions = sum(p["total_predictions"] for p in performance_stats)
+                
+                if total_predictions > 0:
+                    overall_accuracy = (total_correct / total_predictions) * 100
+                    overall_stats[timeframe] = {
+                        "accuracy": overall_accuracy,
+                        "total": total_predictions,
+                        "correct": total_correct
+                    }
+                    
+                    # Get token-specific stats
+                    token_stats = {}
+                    for stat in performance_stats:
+                        token = stat["token"]
+                        if stat["total_predictions"] > 0:
+                            token_stats[token] = {
+                                "accuracy": stat["accuracy_rate"],
+                                "total": stat["total_predictions"]
+                            }
+                    
+                    # Sort tokens by accuracy
+                    sorted_tokens = sorted(token_stats.items(), key=lambda x: x[1]["accuracy"], reverse=True)
+                    overall_stats[timeframe]["top_tokens"] = sorted_tokens[:3]
+                    overall_stats[timeframe]["bottom_tokens"] = sorted_tokens[-3:] if len(sorted_tokens) >= 3 else []
+            
+            if not overall_stats:
+                return False
+                
+            # Generate report
+            report = "📊 WEEKLY PREDICTION SUMMARY 📊\n\n"
+            
+            # Add summary for each timeframe
+            for timeframe, stats in overall_stats.items():
+                if timeframe == "1h":
+                    display_tf = "1 HOUR"
+                elif timeframe == "24h":
+                    display_tf = "24 HOUR"
+                else:  # 7d
+                    display_tf = "7 DAY"
+                    
+                report += f"== {display_tf} PREDICTIONS ==\n"
+                report += f"Overall Accuracy: {stats['accuracy']:.1f}% ({stats['correct']}/{stats['total']})\n\n"
+                
+                if stats.get("top_tokens"):
+                    report += "Top Performers:\n"
+                    for token, token_stats in stats["top_tokens"]:
+                        report += f"#{token}: {token_stats['accuracy']:.1f}% ({token_stats['total']} predictions)\n"
+                        
+                if stats.get("bottom_tokens"):
+                    report += "\nBottom Performers:\n"
+                    for token, token_stats in stats["bottom_tokens"]:
+                        report += f"#{token}: {token_stats['accuracy']:.1f}% ({token_stats['total']} predictions)\n"
+                        
+                report += "\n"
+                
+            # Ensure report isn't too long
+            max_length = self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH']
+            if len(report) > max_length:
+                # Truncate report intelligently
+                sections = report.split("==")
+                shortened_report = sections[0]  # Keep header
+                
+                # Add as many sections as will fit
+                for section in sections[1:]:
+                    if len(shortened_report + "==" + section) <= max_length:
+                        shortened_report += "==" + section
+                    else:
+                        break
+                        
+                report = shortened_report
+            
+            # Post the weekly summary
+            return self._post_analysis(report, timeframe="summary")
+            
+        except Exception as e:
+            logger.log_error("Weekly Summary", str(e))
+            return False
+
+    def _prioritize_tokens(self, available_tokens: List[str], market_data: Dict[str, Any]) -> List[str]:
+        """
+        Prioritize tokens across all timeframes based on momentum score and other factors
+        
+        Args:
+            available_tokens: List of available token symbols
+            market_data: Market data dictionary
+            
+        Returns:
+            Prioritized list of token symbols
+        """
+        try:
+            token_priorities = []
+        
+            for token in available_tokens:
+                # Calculate token-specific priority scores for each timeframe
+                priority_scores = {}
+                for timeframe in self.timeframes:
+                    # Calculate momentum score for this timeframe
+                    momentum_score = self._calculate_momentum_score(token, market_data, timeframe=timeframe)
+                
+                    # Get latest prediction time for this token and timeframe
+                    last_prediction = self.config.db.get_active_predictions(token=token, timeframe=timeframe)
+                    hours_since_prediction = 24  # Default high value
+                
+                    if last_prediction:
+                        last_time = strip_timezone(datetime.fromisoformat(last_prediction[0]["timestamp"]))
+                        hours_since_prediction = safe_datetime_diff(datetime.now(), last_time) / 3600
+                
+                    # Scale time factor based on timeframe
+                    if timeframe == "1h":
+                        time_factor = 2.0  # Regular weight for 1h
+                    elif timeframe == "24h":
+                        time_factor = 0.5  # Lower weight for 24h
+                    else:  # 7d
+                        time_factor = 0.1  # Lowest weight for 7d
+                        
+                    # Priority score combines momentum and time since last prediction
+                    priority_scores[timeframe] = momentum_score + (hours_since_prediction * time_factor)
+                
+                # Combined score is weighted average across all timeframes with focus on shorter timeframes
+                combined_score = (
+                    priority_scores.get("1h", 0) * 0.6 +
+                    priority_scores.get("24h", 0) * 0.3 +
+                    priority_scores.get("7d", 0) * 0.1
+                )
+                
+                token_priorities.append((token, combined_score))
+        
+            # Sort by priority score (highest first)
+            sorted_tokens = [t[0] for t in sorted(token_priorities, key=lambda x: x[1], reverse=True)]
+        
+            return sorted_tokens
+        
+        except Exception as e:
+            logger.log_error("Token Prioritization", str(e))
+            return available_tokens  # Return original list on error
+
+    def _generate_predictions(self, token: str, market_data: Dict[str, Any], timeframe: str = "1h") -> Dict[str, Any]:
+        """
+        Generate market predictions for a specific token at a specific timeframe
+        
+        Args:
+            token: Token symbol
+            market_data: Market data dictionary
+            timeframe: Timeframe for prediction
+            
+        Returns:
+            Prediction data dictionary
+        """
+        try:
+            logger.logger.info(f"Generating {timeframe} predictions for {token}")
+        
+            # Fix: Add try/except to handle the max() arg is an empty sequence error
+            try:
+                # Generate prediction for the specified timeframe
+                prediction = self.prediction_engine.generate_prediction(
+                    token=token,
+                    market_data=market_data,
+                    timeframe=timeframe
+                )
+            except ValueError as ve:
+                # Handle the empty sequence error specifically
+                if "max() arg is an empty sequence" in str(ve):
+                    logger.logger.warning(f"Empty sequence error for {token} ({timeframe}), using fallback prediction")
+                    # Create a basic fallback prediction
+                    token_data = market_data.get(token, {})
+                    current_price = token_data.get('current_price', 0)
+                
+                    # Adjust fallback values based on timeframe
+                    if timeframe == "1h":
+                        change_pct = 0.5
+                        confidence = 60
+                        range_factor = 0.01
+                    elif timeframe == "24h":
+                        change_pct = 1.2
+                        confidence = 55
+                        range_factor = 0.025
+                    else:  # 7d
+                        change_pct = 2.5
+                        confidence = 50
+                        range_factor = 0.05
+                
+                    prediction = {
+                        "prediction": {
+                            "price": current_price * (1 + change_pct/100),
+                            "confidence": confidence,
+                            "lower_bound": current_price * (1 - range_factor),
+                            "upper_bound": current_price * (1 + range_factor),
+                            "percent_change": change_pct,
+                            "timeframe": timeframe
+                        },
+                        "rationale": f"Technical analysis based on recent price action for {token} over the {timeframe} timeframe.",
+                        "sentiment": "NEUTRAL",
+                        "key_factors": ["Technical analysis", "Recent price action", "Market conditions"],
+                        "timestamp": strip_timezone(datetime.now())
+                    }
+                else:
+                    # Re-raise other ValueError exceptions
+                    raise
+        
+            # Store prediction in database
+            prediction_id = self.config.db.store_prediction(token, prediction, timeframe=timeframe)
+            logger.logger.info(f"Stored {token} {timeframe} prediction with ID {prediction_id}")
+        
+            return prediction
+        
+        except Exception as e:
+            logger.log_error(f"Generate Predictions - {token} ({timeframe})", str(e))
+            return {}
+
+    @ensure_naive_datetimes
+    def _run_analysis_cycle(self) -> None:
+        """Run analysis and posting cycle for all tokens with multi-timeframe prediction integration"""
+        try:
+            # First, evaluate any expired predictions
+            self._evaluate_expired_predictions()
+            logger.logger.debug("TIMEFRAME DEBUGGING INFO:")
+            for tf in self.timeframes:
+                logger.logger.debug(f"Timeframe: {tf}")
+                last_post = self.timeframe_last_post.get(tf)
+                next_scheduled = self.next_scheduled_posts.get(tf)
+                logger.logger.debug(f"  last_post type: {type(last_post)}, value: {last_post}")
+                logger.logger.debug(f"  next_scheduled type: {type(next_scheduled)}, value: {next_scheduled}")
+            
+            # Get market data
+            market_data = self._get_crypto_data()
+            if not market_data:
+                logger.logger.error("Failed to fetch market data")
+                return
+        
+            # Get available tokens
+            available_tokens = [token for token in self.reference_tokens if token in market_data]
+            if not available_tokens:
+                logger.logger.error("No token data available")
+                return
+        
+            # Decide what type of content to prioritize
+            post_priority = self._decide_post_type(market_data)
+
+            # Act based on the decision
+            if post_priority == "reply":
+                # Prioritize finding and replying to posts
+                if self._check_for_reply_opportunities(market_data):
+                    logger.logger.info("Successfully posted replies based on priority decision")
+                    return
+                # Fall back to other post types if no reply opportunities
+            
+            elif post_priority == "prediction":
+                # Prioritize prediction posts (try timeframe rotation first)
+                if self._post_timeframe_rotation(market_data):
+                    logger.logger.info("Posted scheduled timeframe prediction based on priority decision")
+                    return
+                # Fall back to token-specific predictions for 1h timeframe
+            
+            elif post_priority == "correlation":
+                # Generate and post correlation report
+                report_timeframe = self.timeframes[datetime.now().hour % len(self.timeframes)]
+                correlation_report = self._generate_correlation_report(market_data, timeframe=report_timeframe)
+                if correlation_report and self._post_analysis(correlation_report, timeframe=report_timeframe):
+                    logger.logger.info(f"Posted {report_timeframe} correlation matrix report based on priority decision")
+                    return
+                    
+            elif post_priority == "tech":
+                # Prioritize posting tech educational content
+                if self._post_tech_educational_content(market_data):
+                    logger.logger.info("Posted tech educational content based on priority decision")
+                    return
+                # Fall back to other post types if tech posting failed
+        
+            # Initialize trigger_type with a default value to prevent NoneType errors
+            trigger_type = "regular_interval"
+            
+            # Prioritize tokens instead of just shuffling
+            available_tokens = self._prioritize_tokens(available_tokens, market_data)
+    
+            # For 1h predictions and regular updates, try each token until we find one that's suitable
+            for token_to_analyze in available_tokens:
+                should_post, token_trigger_type = self._should_post_update(token_to_analyze, market_data, timeframe="1h")
+        
+                if should_post:
+                    # Update the main trigger_type variable
+                    trigger_type = token_trigger_type
+                    logger.logger.info(f"Starting {token_to_analyze} analysis cycle - Trigger: {trigger_type}")
+            
+                    # Generate prediction for this token with 1h timeframe
+                    prediction = self._generate_predictions(token_to_analyze, market_data, timeframe="1h")
+            
+                    if not prediction:
+                        logger.logger.error(f"Failed to generate 1h prediction for {token_to_analyze}")
+                        continue
+
+                    # Get both standard analysis and prediction-focused content 
+                    standard_analysis, storage_data = self._analyze_market_sentiment(
+                        token_to_analyze, market_data, trigger_type, timeframe="1h"
+                    )
+                    prediction_tweet = self._format_prediction_tweet(token_to_analyze, prediction, market_data, timeframe="1h")
+            
+                    # Choose which type of content to post based on trigger and past posts
+                    # For prediction-specific triggers or every third post, post prediction
+                    should_post_prediction = (
+                        "prediction" in trigger_type or 
+                        random.random() < 0.35  # 35% chance of posting prediction instead of analysis
+                    )
+            
+                    if should_post_prediction:
+                        analysis_to_post = prediction_tweet
+                        # Add prediction data to storage
+                        if storage_data:
+                            storage_data['is_prediction'] = True
+                            storage_data['prediction_data'] = prediction
+                    else:
+                        analysis_to_post = standard_analysis
+                        if storage_data:
+                            storage_data['is_prediction'] = False
+            
+                    if not analysis_to_post:
+                        logger.logger.error(f"Failed to generate content for {token_to_analyze}")
+                        continue
+                
+                    # Check for duplicates
+                    last_posts = self._get_last_posts_by_timeframe(timeframe="1h")
+                    if not self._is_duplicate_analysis(analysis_to_post, last_posts, timeframe="1h"):
+                        if self._post_analysis(analysis_to_post, timeframe="1h"):
+                            # Only store in database after successful posting
+                            if storage_data:
+                                self.config.db.store_posted_content(**storage_data)
+                        
+                            logger.logger.info(
+                                f"Successfully posted {token_to_analyze} "
+                                f"{'prediction' if should_post_prediction else 'analysis'} - "
+                                f"Trigger: {trigger_type}"
+                            )
+                    
+                            # Store additional smart money metrics
+                            if token_to_analyze in market_data:
+                                smart_money = self._analyze_smart_money_indicators(
+                                    token_to_analyze, market_data[token_to_analyze], timeframe="1h"
+                                )
+                                self.config.db.store_smart_money_indicators(token_to_analyze, smart_money)
+                        
+                                # Store market comparison data
+                                vs_market = self._analyze_token_vs_market(token_to_analyze, market_data, timeframe="1h")
+                                if vs_market:
+                                    self.config.db.store_token_market_comparison(
+                                        token_to_analyze,
+                                        vs_market.get('vs_market_avg_change', 0),
+                                        vs_market.get('vs_market_volume_growth', 0),
+                                        vs_market.get('outperforming_market', False),
+                                        vs_market.get('correlations', {})
+                                    )
+                    
+                            # Successfully posted, so we're done with this cycle
+                            return
+                        else:
+                            logger.logger.error(f"Failed to post {token_to_analyze} {'prediction' if should_post_prediction else 'analysis'}")
+                            continue  # Try next token
+                    else:
+                        logger.logger.info(f"Skipping duplicate {token_to_analyze} content - trying another token")
+                        continue  # Try next token
+                else:
+                    logger.logger.debug(f"No significant {token_to_analyze} changes detected, trying another token")
+    
+            # If we couldn't find any token-specific update to post, 
+            # try posting a correlation report on regular intervals
+            if "regular_interval" in trigger_type:
+                # Try posting tech educational content first
+                if self._post_tech_educational_content(market_data):
+                    logger.logger.info("Posted tech educational content as fallback")
+                    return
+                    
+                # Alternate between different timeframe correlation reports
+                current_hour = datetime.now().hour
+                report_timeframe = self.timeframes[current_hour % len(self.timeframes)]
+            
+                correlation_report = self._generate_correlation_report(market_data, timeframe=report_timeframe)
+                if correlation_report and self._post_analysis(correlation_report, timeframe=report_timeframe):
+                    logger.logger.info(f"Posted {report_timeframe} correlation matrix report")
+                    return      
+
+            # If still no post, try reply opportunities as a last resort
+            if post_priority != "reply":  # Only if we haven't already tried replies
+                logger.logger.info("Checking for reply opportunities as fallback")
+                if self._check_for_reply_opportunities(market_data):
+                    logger.logger.info("Successfully posted replies as fallback")
+                    return
+
+            # If we get here, we tried all tokens but couldn't post anything
+            logger.logger.warning("Tried all available tokens but couldn't post any analysis or replies")
+        
+        except Exception as e:
+            logger.log_error("Token Analysis Cycle", str(e))
+
+    @ensure_naive_datetimes
+    def _decide_post_type(self, market_data: Dict[str, Any]) -> str:
+        """
+        Make a strategic decision on what type of post to prioritize: prediction, analysis, reply, tech, or correlation
+    
+        Args:
+            market_data: Market data dictionary
+            
+        Returns:
+            String indicating the recommended action: "prediction", "analysis", "reply", "tech", or "correlation"
+        """
+        try:
+            now = strip_timezone(datetime.now())
+    
+            # Initialize decision factors
+            decision_factors = {
+                'prediction': 0.0,
+                'analysis': 0.0,
+                'reply': 0.0,
+                'correlation': 0.0,
+                'tech': 0.0  # Added tech as a new decision factor
+            }
+    
+            # Factor 1: Time since last post of each type
+            # Use existing database methods instead of get_last_post_time
+            try:
+                # Get recent posts from the database
+                recent_posts = self.config.db.get_recent_posts(hours=24)
+        
+                # Find the most recent posts of each type
+                last_analysis_time = None
+                last_prediction_time = None
+                last_correlation_time = None
+                last_tech_time = None  # Added tech time tracking
+        
+                for post in recent_posts:
+                    # Convert timestamp to datetime if it's a string
+                    post_timestamp = post.get('timestamp')
+                    if isinstance(post_timestamp, str):
+                        try:
+                            post_timestamp = strip_timezone(datetime.fromisoformat(post_timestamp))
+                        except ValueError:
+                            continue
+            
+                    # Check if it's a prediction post
+                    if post.get('is_prediction', False):
+                        if last_prediction_time is None or post_timestamp > last_prediction_time:
+                            last_prediction_time = post_timestamp
+                    # Check if it's a correlation post
+                    elif 'CORRELATION' in post.get('content', '').upper():
+                        if last_correlation_time is None or post_timestamp > last_correlation_time:
+                            last_correlation_time = post_timestamp
+                    # Check if it's a tech post
+                    elif post.get('tech_category', False) or post.get('tech_metadata', False) or 'tech_' in post.get('trigger_type', ''):
+                        if last_tech_time is None or post_timestamp > last_tech_time:
+                            last_tech_time = post_timestamp
+                    # Otherwise it's an analysis post
+                    else:
+                        if last_analysis_time is None or post_timestamp > last_analysis_time:
+                            last_analysis_time = post_timestamp
+            except Exception as db_err:
+                logger.logger.warning(f"Error retrieving recent posts: {str(db_err)}")
+                last_analysis_time = now - timedelta(hours=12)  # Default fallback
+                last_prediction_time = now - timedelta(hours=12)  # Default fallback
+                last_correlation_time = now - timedelta(hours=48)  # Default fallback
+                last_tech_time = now - timedelta(hours=24)  # Default fallback for tech
+    
+            # Set default values if no posts found
+            if last_analysis_time is None:
+                last_analysis_time = now - timedelta(hours=24)
+            if last_prediction_time is None:
+                last_prediction_time = now - timedelta(hours=24)
+            if last_correlation_time is None:
+                last_correlation_time = now - timedelta(hours=48)
+            if last_tech_time is None:
+                last_tech_time = now - timedelta(hours=24)
+            
+            # Calculate hours since each type of post using safe_datetime_diff
+            hours_since_analysis = safe_datetime_diff(now, last_analysis_time) / 3600
+            hours_since_prediction = safe_datetime_diff(now, last_prediction_time) / 3600
+            hours_since_correlation = safe_datetime_diff(now, last_correlation_time) / 3600
+            hours_since_tech = safe_datetime_diff(now, last_tech_time) / 3600
+    
+            # Check time since last reply (using our sanitized datetime)
+            last_reply_time = strip_timezone(self._ensure_datetime(self.last_reply_time))
+            hours_since_reply = safe_datetime_diff(now, last_reply_time) / 3600
+    
+            # Add time factors to decision weights (more time = higher weight)
+            decision_factors['prediction'] += min(5.0, hours_since_prediction * 0.5)  # Cap at 5.0
+            decision_factors['analysis'] += min(5.0, hours_since_analysis * 0.5)  # Cap at 5.0
+            decision_factors['reply'] += min(5.0, hours_since_reply * 0.8)  # Higher weight for replies
+            decision_factors['correlation'] += min(3.0, hours_since_correlation * 0.1)  # Lower weight for correlations
+            decision_factors['tech'] += min(4.0, hours_since_tech * 0.6)  # Medium weight for tech content
+    
+            # Factor 2: Time of day considerations - adjust to audience activity patterns
+            current_hour = now.hour
+    
+            # Morning hours (6-10 AM): Favor analyses, predictions and tech content for day traders
+            if 6 <= current_hour <= 10:
+                decision_factors['prediction'] += 2.0
+                decision_factors['analysis'] += 1.5
+                decision_factors['tech'] += 1.5  # Good time for educational content
+                decision_factors['reply'] += 0.5
+        
+            # Mid-day (11-15): Balanced approach, slight favor to replies
+            elif 11 <= current_hour <= 15:
+                decision_factors['prediction'] += 1.0
+                decision_factors['analysis'] += 1.0
+                decision_factors['tech'] += 1.2  # Still good for tech content
+                decision_factors['reply'] += 1.5
+        
+            # Evening hours (16-22): Strong favor to replies to engage with community
+            elif 16 <= current_hour <= 22:
+                decision_factors['prediction'] += 0.5
+                decision_factors['analysis'] += 1.0
+                decision_factors['tech'] += 0.8  # Lower priority but still relevant
+                decision_factors['reply'] += 2.5
+        
+            # Late night (23-5): Favor analyses, tech content, deprioritize replies
+            else:
+                decision_factors['prediction'] += 1.0
+                decision_factors['analysis'] += 2.0
+                decision_factors['tech'] += 2.0  # Great for tech content when audience is more global
+                decision_factors['reply'] += 0.5
+                decision_factors['correlation'] += 1.5  # Good time for correlation reports
+    
+            # Factor 3: Market volatility - in volatile markets, predictions and analyses are more valuable
+            market_volatility = self._calculate_market_volatility(market_data)
+    
+            # High volatility boosts prediction and analysis priority
+            if market_volatility > 3.0:  # High volatility
+                decision_factors['prediction'] += 2.0
+                decision_factors['analysis'] += 1.5
+                decision_factors['tech'] -= 0.5  # Less focus on educational content during high volatility
+            elif market_volatility > 1.5:  # Moderate volatility
+                decision_factors['prediction'] += 1.0
+                decision_factors['analysis'] += 1.0
+            else:  # Low volatility, good time for educational content
+                decision_factors['tech'] += 1.0
+    
+            # Factor 4: Community engagement level - check for active discussions
+            active_discussions = self._check_for_active_discussions(market_data)
+            if active_discussions:
+                # If there are active discussions, favor replies
+                decision_factors['reply'] += len(active_discussions) * 0.5  # More discussions = higher priority
+                
+                # Check if there are tech-related discussions
+                tech_discussions = [d for d in active_discussions if self._is_tech_related_post(d)]
+                if tech_discussions:
+                    # If tech discussions are happening, boost tech priority
+                    decision_factors['tech'] += len(tech_discussions) * 0.8
+                    
+                logger.logger.debug(f"Found {len(active_discussions)} active discussions ({len(tech_discussions)} tech-related), boosting reply priority")
+    
+            # Factor 5: Check scheduled timeframe posts - these get high priority
+            due_timeframes = [tf for tf in self.timeframes if self._should_post_timeframe_now(tf)]
+            if due_timeframes:
+                decision_factors['prediction'] += 3.0  # High priority for scheduled predictions
+                logger.logger.debug(f"Scheduled timeframe posts due: {due_timeframes}")
+    
+            # Factor 6: Day of week considerations
+            weekday = now.weekday()  # 0=Monday, 6=Sunday
+    
+            # Weekends: More casual engagement (replies), less formal analysis
+            if weekday >= 5:  # Saturday or Sunday
+                decision_factors['reply'] += 1.5
+                decision_factors['tech'] += 1.0  # Good for educational content on weekends
+                decision_factors['correlation'] += 0.5
+            # Mid-week: Focus on predictions and analysis
+            elif 1 <= weekday <= 3:  # Tuesday to Thursday
+                decision_factors['prediction'] += 1.0
+                decision_factors['analysis'] += 0.5
+                decision_factors['tech'] += 0.5  # Steady tech content through the week
+    
+            # Factor 7: Tech content readiness
+            tech_analysis = self._analyze_tech_topics(market_data)
+            if tech_analysis.get('enabled', False) and tech_analysis.get('candidate_topics', []):
+                # Boost tech priority if we have ready topics
+                decision_factors['tech'] += 2.0
+                logger.logger.debug(f"Tech topics ready: {len(tech_analysis.get('candidate_topics', []))}")
+            
+            # Log decision factors for debugging
+            logger.logger.debug(f"Post type decision factors: {decision_factors}")
+    
+            # Determine highest priority action
+            highest_priority = max(decision_factors.items(), key=lambda x: x[1])
+            action = highest_priority[0]
+    
+            # Special case: If correlation has reasonable score and it's been a while, prioritize it
+            if hours_since_correlation > 48 and decision_factors['correlation'] > 2.0:
+                action = 'correlation'
+                logger.logger.debug(f"Overriding to correlation post ({hours_since_correlation}h since last one)")
+    
+            logger.logger.info(f"Decided post type: {action} (score: {highest_priority[1]:.2f})")
+            return action
+    
+        except Exception as e:
+            logger.log_error("Decide Post Type", str(e))
+            # Default to analysis as a safe fallback
+            return "analysis"
+        
+    def _calculate_market_volatility(self, market_data: Dict[str, Any]) -> float:
+        """
+        Calculate overall market volatility score based on price movements
+        
+        Args:
+            market_data: Market data dictionary
+            
+        Returns:
+            Volatility score (0.0-5.0)
+        """
+        try:
+            if not market_data:
+                return 1.0  # Default moderate volatility
+            
+            # Extract price changes for major tokens
+            major_tokens = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP']
+            changes = []
+        
+            for token in major_tokens:
+                if token in market_data:
+                    change = abs(market_data[token].get('price_change_percentage_24h', 0))
+                    changes.append(change)
+        
+            if not changes:
+                return 1.0
+            
+            # Calculate average absolute price change
+            avg_change = sum(changes) / len(changes)
+        
+            # Calculate volatility score (normalized to a 0-5 scale)
+            # <1% = Very Low, 1-2% = Low, 2-3% = Moderate, 3-5% = High, >5% = Very High
+            if avg_change < 1.0:
+                return 0.5  # Very low volatility
+            elif avg_change < 2.0:
+                return 1.0  # Low volatility
+            elif avg_change < 3.0:
+                return 2.0  # Moderate volatility
+            elif avg_change < 5.0:
+                return 3.0  # High volatility
+            else:
+                return 5.0  # Very high volatility
+    
+        except Exception as e:
+            logger.log_error("Calculate Market Volatility", str(e))
+            return 1.0  # Default to moderate volatility on error
+
+    def _check_for_active_discussions(self, market_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Check for active token discussions that might warrant replies
+        
+        Args:
+            market_data: Market data dictionary
+            
+        Returns:
+            List of posts representing active discussions
+        """
+        try:
+            # Get recent timeline posts
+            recent_posts = self.timeline_scraper.scrape_timeline(count=15)
+            if not recent_posts:
+                return []
+            
+            # Filter for posts with engagement (replies, likes)
+            engaged_posts = []
+            for post in recent_posts:
+                # Simple engagement check
+                has_engagement = (
+                    post.get('reply_count', 0) > 0 or
+                    post.get('like_count', 0) > 2 or
+                    post.get('retweet_count', 0) > 0
+                )
+            
+                if has_engagement:
+                    # Analyze the post content
+                    analysis = self.content_analyzer.analyze_post(post)
+                    post['content_analysis'] = analysis
+                
+                    # Check if it's a market-related post with sufficient reply score
+                    if analysis.get('reply_worthy', False):
+                        engaged_posts.append(post)
+        
+            return engaged_posts
+    
+        except Exception as e:
+            logger.log_error("Check Active Discussions", str(e))
+            return []
+            
     def _analyze_smart_money_indicators(self, token: str, token_data: Dict[str, Any], 
                                       timeframe: str = "1h") -> Dict[str, Any]:
         """
         Analyze potential smart money movements in a token
         Adjusted for different timeframes
+        
+        Args:
+            token: Token symbol
+            token_data: Token market data
+            timeframe: Timeframe for analysis
+            
+        Returns:
+            Smart money analysis results
         """
         try:
             # Get historical data over multiple timeframes - adjusted based on prediction timeframe
@@ -1620,7 +3450,7 @@ class CryptoAnalysisBot:
             
             if hourly_data:
                 for i in range(min(hours_to_analyze, 24)):  # Cap at 24 hours for profile
-                    hour_window = datetime.now() - timedelta(hours=i+1)
+                    hour_window = strip_timezone(datetime.now() - timedelta(hours=i+1))
                     hour_volume = sum(entry['volume'] for entry in hourly_data 
                                     if hour_window <= entry['timestamp'] <= hour_window + timedelta(hours=1))
                     volume_profile[f"hour_{i+1}"] = hour_volume
@@ -1648,6 +3478,7 @@ class CryptoAnalysisBot:
                     if all(vol > avg_hourly_volume * cluster_threshold for vol in hourly_volumes[i:i+min_cluster_size]):
                         volume_cluster_detected = True
                         break           
+            
             # Calculate additional metrics for longer timeframes
             pattern_metrics = {}
             
@@ -1703,6 +3534,14 @@ class CryptoAnalysisBot:
         """
         Analyze volume distribution and patterns for a token
         Returns different volume metrics based on timeframe
+        
+        Args:
+            token: Token symbol
+            market_data: Market data dictionary
+            timeframe: Timeframe for analysis
+            
+        Returns:
+            Volume profile analysis results
         """
         try:
             token_data = market_data.get(token, {})
@@ -1825,10 +3664,18 @@ class CryptoAnalysisBot:
             return {'timeframe': timeframe}
 
     def _detect_volume_anomalies(self, token: str, market_data: Dict[str, Any], 
-                               timeframe: str = "1h") -> Dict[str, Any]:
+                              timeframe: str = "1h") -> Dict[str, Any]:
         """
         Detect volume anomalies and unusual patterns
         Adjust detection thresholds based on timeframe
+        
+        Args:
+            token: Token symbol
+            market_data: Market data dictionary
+            timeframe: Timeframe for analysis
+            
+        Returns:
+            Volume anomaly detection results
         """
         try:
             token_data = market_data.get(token, {})
@@ -1952,6 +3799,14 @@ class CryptoAnalysisBot:
         """
         Analyze token performance relative to the overall crypto market
         Adjusted for different timeframes
+        
+        Args:
+            token: Token symbol
+            market_data: Market data dictionary
+            timeframe: Timeframe for analysis
+            
+        Returns:
+            Token vs market analysis results
         """
         try:
             token_data = market_data.get(token, {})
@@ -2132,6 +3987,15 @@ class CryptoAnalysisBot:
         """
         Calculate token's volatility relative to market average
         Returns a ratio where >1 means more volatile than market, <1 means less volatile
+        
+        Args:
+            token: Token symbol
+            reference_tokens: List of reference token symbols
+            market_data: Market data dictionary
+            timeframe: Timeframe for analysis
+        
+        Returns:
+            Relative volatility ratio or None if insufficient data
         """
         try:
             # Get historical data with appropriate window for the timeframe
@@ -2199,6 +4063,14 @@ class CryptoAnalysisBot:
         """
         Calculate token correlations with the market
         Adjust correlation window based on timeframe
+        
+        Args:
+            token: Token symbol
+            market_data: Market data dictionary
+            timeframe: Timeframe for analysis
+            
+        Returns:
+            Dictionary of correlation metrics
         """
         try:
             token_data = market_data.get(token, {})
@@ -2321,13 +4193,20 @@ class CryptoAnalysisBot:
     def _generate_correlation_report(self, market_data: Dict[str, Any], timeframe: str = "1h") -> str:
         """
         Generate a report of correlations between top tokens
-        Customized based on timeframe
+        Customized based on timeframe with duplicate detection
+    
+        Args:
+            market_data: Market data dictionary
+            timeframe: Timeframe for analysis
+        
+        Returns:
+            Formatted correlation report as string
         """
         try:
             # Fix 1: Add check for market_data being None
             if not market_data:
                 return f"Failed to generate {timeframe} correlation report: No market data available"
-                
+            
             # Select tokens to include based on timeframe
             if timeframe == "1h":
                 tokens = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP']  # Focus on major tokens for hourly
@@ -2335,9 +4214,11 @@ class CryptoAnalysisBot:
                 tokens = ['BTC', 'ETH', 'SOL', 'BNB', 'AVAX', 'XRP']  # More tokens for daily
             else:  # 7d
                 tokens = ['BTC', 'ETH', 'SOL', 'BNB', 'AVAX', 'DOT', 'XRP']  # Most tokens for weekly
-        
-            # Create correlation matrix
+    
+            # Create correlation matrix and include a report ID for tracking
             correlation_matrix = {}
+            report_id = f"corr_matrix_{timeframe}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
             for token1 in tokens:
                 correlation_matrix[token1] = {}
                 # Fix 2: Properly nest the token2 loop inside the token1 loop
@@ -2345,21 +4226,21 @@ class CryptoAnalysisBot:
                     if token1 == token2:
                         correlation_matrix[token1][token2] = 1.0
                         continue
-                    
+                
                     if token1 not in market_data or token2 not in market_data:
                         correlation_matrix[token1][token2] = 0.0
                         continue
-                    
+                
                     # Adjust correlation calculation based on timeframe
                     if timeframe == "1h":
                         # For hourly, use 24h price change
                         price_change1 = market_data[token1]['price_change_percentage_24h']
                         price_change2 = market_data[token2]['price_change_percentage_24h']
-                        
+                    
                         # Calculate simple correlation
                         price_direction1 = 1 if price_change1 > 0 else -1
                         price_direction2 = 1 if price_change2 > 0 else -1
-                        
+                    
                         # Basic correlation (-1.0 to 1.0)
                         correlation = 1.0 if price_direction1 == price_direction2 else -1.0
                     else:
@@ -2367,12 +4248,12 @@ class CryptoAnalysisBot:
                         # Get historical data
                         token1_history = self._get_historical_price_data(token1, timeframe=timeframe)
                         token2_history = self._get_historical_price_data(token2, timeframe=timeframe)
-                        
+                    
                         if len(token1_history) >= 5 and len(token2_history) >= 5:
                             # Extract prices for correlation calculation
-                            prices1 = [entry.get('price', 0) for entry in token1_history][:min(len(token1_history), len(token2_history))]
-                            prices2 = [entry.get('price', 0) for entry in token2_history][:min(len(token1_history), len(token2_history))]
-                            
+                            prices1 = [entry.get('price', 0) for entry in token1_history]
+                            prices2 = [entry.get('price', 0) for entry in token2_history]
+                        
                             try:
                                 # Calculate Pearson correlation
                                 correlation = np.corrcoef(prices1, prices2)[0, 1]
@@ -2391,10 +4272,15 @@ class CryptoAnalysisBot:
                             price_direction1 = 1 if market_data[token1]['price_change_percentage_24h'] > 0 else -1
                             price_direction2 = 1 if market_data[token2]['price_change_percentage_24h'] > 0 else -1
                             correlation = 1.0 if price_direction1 == price_direction2 else -1.0
-                            
+                        
                     correlation_matrix[token1][token2] = correlation
-            
-            # Fix 3: Move the report formatting outside the loops
+        
+            # Check if this matrix is similar to recent posts to prevent duplication
+            if self._is_matrix_duplicate(correlation_matrix, timeframe):
+                logger.logger.warning(f"Detected duplicate {timeframe} correlation matrix, skipping")
+                return None  # Return None to signal duplicate
+    
+            # Format the report text
             if timeframe == "1h":
                 report = "1H CORRELATION MATRIX:\n\n"
             elif timeframe == "24h":
@@ -2418,15 +4304,15 @@ class CryptoAnalysisBot:
                     else:
                         report += "📉 "  # Negative
                 report += "\n"
-            
+        
             report += "\nKey: ✦=Same ➕=Strong+ 📈=Weak+ ➖=Strong- 📉=Weak-"
-            
+        
             # Add timeframe-specific insights
             if timeframe == "24h" or timeframe == "7d":
                 # For longer timeframes, add sector analysis
                 defi_tokens = [t for t in tokens if t in ["UNI", "AAVE"]]
                 layer1_tokens = [t for t in tokens if t in ["ETH", "SOL", "AVAX", "NEAR"]]
-                
+            
                 # Check if we have enough tokens from each sector
                 if len(defi_tokens) >= 2 and len(layer1_tokens) >= 2:
                     # Calculate average intra-sector correlation
@@ -2436,50 +4322,179 @@ class CryptoAnalysisBot:
                             t1, t2 = defi_tokens[i], defi_tokens[j]
                             if t1 in correlation_matrix and t2 in correlation_matrix[t1]:
                                 defi_corrs.append(correlation_matrix[t1][t2])
-                    
+                
                     layer1_corrs = []
                     for i in range(len(layer1_tokens)):
                         for j in range(i+1, len(layer1_tokens)):
                             t1, t2 = layer1_tokens[i], layer1_tokens[j]
                             if t1 in correlation_matrix and t2 in correlation_matrix[t1]:
                                 layer1_corrs.append(correlation_matrix[t1][t2])
-                    
+                
                     # Calculate cross-sector correlation
                     cross_corrs = []
                     for t1 in defi_tokens:
                         for t2 in layer1_tokens:
                             if t1 in correlation_matrix and t2 in correlation_matrix[t1]:
                                 cross_corrs.append(correlation_matrix[t1][t2])
-                    
+                
                     # Add to report if we have correlation data
                     if defi_corrs and layer1_corrs and cross_corrs:
                         avg_defi_corr = sum(defi_corrs) / len(defi_corrs)
                         avg_layer1_corr = sum(layer1_corrs) / len(layer1_corrs)
                         avg_cross_corr = sum(cross_corrs) / len(cross_corrs)
-                        
+                    
                         report += f"\n\nSector Analysis:"
                         report += f"\nDeFi internal correlation: {avg_defi_corr:.2f}"
                         report += f"\nLayer1 internal correlation: {avg_layer1_corr:.2f}"
                         report += f"\nCross-sector correlation: {avg_cross_corr:.2f}"
-                        
+                    
                         # Interpret sector rotation
                         if avg_cross_corr < min(avg_defi_corr, avg_layer1_corr) - 0.3:
                             report += "\nPossible sector rotation detected!"
-            
+        
+            # Store report details in the database for tracking
+            self._save_correlation_report(report_id, correlation_matrix, timeframe, report)
+        
             return report
+    
         except Exception as e:
             logger.log_error(f"Correlation Report - {timeframe}", str(e))
             return f"Failed to generate {timeframe} correlation report."
 
+    def _is_matrix_duplicate(self, matrix: Dict[str, Dict[str, float]], timeframe: str) -> bool:
+        """
+        Stricter check for duplicate correlation matrices with direct content examination
+    
+        Args:
+            matrix: Correlation matrix to check
+            timeframe: Timeframe for analysis
+        
+        Returns:
+            True if duplicate detected, False otherwise
+        """
+        try:
+            # First, check posted_content table directly with a strong timeframe filter
+            conn, cursor = self.config.db._get_connection()
+        
+            # Define timeframe prefix explicitly
+            timeframe_prefix = ""
+            if timeframe == "1h":
+                timeframe_prefix = "1H CORRELATION MATRIX"
+            elif timeframe == "24h":
+                timeframe_prefix = "24H CORRELATION MATRIX"
+            else:  # 7d
+                timeframe_prefix = "7D CORRELATION MATRIX"
+            
+            # Check for any recent posts with this exact prefix - stricter window for hourly matrices
+            window_hours = 3 if timeframe == "1h" else 12 if timeframe == "24h" else 48
+        
+            # Direct check for ANY recent matrix of this timeframe
+            cursor.execute("""
+                SELECT content, timestamp FROM posted_content
+                WHERE content LIKE ?
+                AND timestamp >= datetime('now', '-' || ? || ' hours')
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (f"{timeframe_prefix}%", window_hours))
+        
+            recent_post = cursor.fetchone()
+        
+            if recent_post:
+                post_time = datetime.fromisoformat(recent_post['timestamp']) if isinstance(recent_post['timestamp'], str) else recent_post['timestamp']
+                now = datetime.now()
+                hours_since_post = (now - post_time).total_seconds() / 3600
+            
+                logger.logger.warning(f"Found recent {timeframe} matrix posted {hours_since_post:.1f} hours ago")
+                return True
+            
+            logger.logger.info(f"No recent {timeframe} matrix found in post history, safe to post")
+            return False
+            
+        except Exception as e:
+            logger.log_error(f"Matrix Duplication Check - {timeframe}", str(e))
+            # On error, be cautious and assume it might be a duplicate
+            logger.logger.warning(f"Error in duplicate check, assuming duplicate to be safe: {str(e)}")
+            return True
+
+    def _generate_correlation_report(self, market_data: Dict[str, Any], timeframe: str = "1h") -> str:
+        """
+        Generate a report of correlations between top tokens with improved duplicate prevention
+    
+        Args:
+            market_data: Market data dictionary
+            timeframe: Timeframe for analysis
+        
+        Returns:
+            Formatted correlation report as string or None if would be duplicate
+        """
+        try:
+            # Check for duplicates FIRST before generating content
+            if self._is_matrix_duplicate(None, timeframe):
+                logger.logger.warning(f"Pre-emptive duplicate check: recent {timeframe} matrix already posted")
+                return None
+        
+            # Rest of your correlation report code...
+            # [Code omitted for brevity]
+        
+        except Exception as e:
+            logger.log_error(f"Correlation Report - {timeframe}", str(e))
+            return None
+
+    def _save_correlation_report(self, report_id: str, matrix: Dict[str, Dict[str, float]], 
+                                timeframe: str, report_text: str) -> None:
+        """
+        Save correlation report data for tracking and duplicate prevention
+    
+        Args:
+            report_id: Unique ID for the report
+            matrix: Correlation matrix data
+            timeframe: Timeframe used for analysis
+            report_text: Formatted report text
+        """
+        try:
+            # Create a hash of the matrix for comparison
+            matrix_str = json.dumps(matrix, sort_keys=True)
+            import hashlib
+            matrix_hash = hashlib.md5(matrix_str.encode()).hexdigest()
+        
+            # Prepare data for storage
+            report_data = {
+                'id': report_id,
+                'timeframe': timeframe,
+                'timestamp': datetime.now().isoformat(),
+                'matrix': matrix,
+                'hash': matrix_hash,
+                'text': report_text
+            }
+        
+            # Store in database (using generic_json_data table)
+            self.config.db._store_json_data(
+                data_type='correlation_report',
+                data=report_data
+            )
+        
+            logger.logger.debug(f"Saved {timeframe} correlation report with ID: {report_id}")
+        
+        except Exception as e:
+            logger.log_error(f"Save Correlation Report - {report_id}", str(e))
+        
     def _calculate_momentum_score(self, token: str, market_data: Dict[str, Any], timeframe: str = "1h") -> float:
         """
         Calculate a momentum score (0-100) for a token based on various metrics
         Adjusted for different timeframes
+        
+        Args:
+            token: Token symbol
+            market_data: Market data dictionary
+            timeframe: Timeframe for analysis
+            
+        Returns:
+            Momentum score (0-100)
         """
         try:
             token_data = market_data.get(token, {})
             if not token_data:
-              return 50.0  # Neutral score
+                return 50.0  # Neutral score
             
             # Get basic metrics
             price_change = token_data.get('price_change_percentage_24h', 0)
@@ -2599,6 +4614,15 @@ class CryptoAnalysisBot:
         """
         Format a prediction into a tweet with FOMO-inducing content
         Supports multiple timeframes (1h, 24h, 7d)
+        
+        Args:
+            token: Token symbol
+            prediction: Prediction data dictionary
+            market_data: Market data dictionary
+            timeframe: Timeframe for the prediction
+            
+        Returns:
+            Formatted prediction tweet
         """
         try:
             # Get prediction details
@@ -2680,10 +4704,17 @@ class CryptoAnalysisBot:
             logger.log_error(f"Format Prediction Tweet - {token} ({timeframe})", str(e))
             return f"#{token} {timeframe.upper()} PREDICTION: ${price:.4f} ({percent_change:+.2f}%) - {sentiment}"
 
+    @ensure_naive_datetimes
     def _track_prediction(self, token: str, prediction: Dict[str, Any], relevant_tokens: List[str], timeframe: str = "1h") -> None:
         """
         Track predictions for future callbacks and analysis
         Supports multiple timeframes (1h, 24h, 7d)
+        
+        Args:
+            token: Token symbol
+            prediction: Prediction data dictionary
+            relevant_tokens: List of relevant token symbols
+            timeframe: Timeframe for the prediction
         """
         MAX_PREDICTIONS = 20  
     
@@ -2692,7 +4723,7 @@ class CryptoAnalysisBot:
     
         # Add the prediction to the tracking list with timeframe info
         self.past_predictions.append({
-            'timestamp': datetime.now(),
+            'timestamp': strip_timezone(datetime.now()),
             'token': token,
             'prediction': prediction['analysis'],
             'prices': current_prices,
@@ -2703,7 +4734,7 @@ class CryptoAnalysisBot:
     
         # Keep only predictions from the last 24 hours, up to MAX_PREDICTIONS
         self.past_predictions = [p for p in self.past_predictions 
-                                  if safe_datetime_diff(datetime.now(), p['timestamp']) < 86400]
+                                 if safe_datetime_diff(datetime.now(), p['timestamp']) < 86400]
     
         # Trim to max predictions if needed
         if len(self.past_predictions) > MAX_PREDICTIONS:
@@ -2711,10 +4742,17 @@ class CryptoAnalysisBot:
         
         logger.logger.debug(f"Tracked {timeframe} prediction for {token}")
 
+    @ensure_naive_datetimes
     def _validate_past_prediction(self, prediction: Dict[str, Any], current_prices: Dict[str, float]) -> str:
         """
         Check if a past prediction was accurate
-        Returns evaluation outcome: 'right', 'wrong', or 'undetermined'
+        
+        Args:
+            prediction: Prediction data dictionary
+            current_prices: Dictionary of current prices
+            
+        Returns:
+            Evaluation outcome: 'right', 'wrong', or 'undetermined'
         """
         sentiment_map = {
             'bullish': 1,
@@ -2756,16 +4794,25 @@ class CryptoAnalysisBot:
     
         return 'wrong' if wrong_tokens else 'right'
     
+    @ensure_naive_datetimes
     def _get_spicy_callback(self, token: str, current_prices: Dict[str, float], timeframe: str = "1h") -> Optional[str]:
         """
         Generate witty callbacks to past terrible predictions
         Supports multiple timeframes
+        
+        Args:
+            token: Token symbol
+            current_prices: Dictionary of current prices
+            timeframe: Timeframe for the callback
+            
+        Returns:
+            Callback text or None if no suitable callback found
         """
         # Look for the most recent prediction for this token and timeframe
         recent_predictions = [p for p in self.past_predictions 
-                            if safe_datetime_diff(datetime.now(), p['timestamp']) < 24*3600
-                            and p['token'] == token
-                            and p.get('timeframe', '1h') == timeframe]
+                             if safe_datetime_diff(datetime.now(), p['timestamp']) < 24*3600
+                             and p['token'] == token
+                             and p.get('timeframe', '1h') == timeframe]
     
         if not recent_predictions:
             return None
@@ -2806,10 +4853,19 @@ class CryptoAnalysisBot:
         
         return None
 
-    def _format_tweet_analysis(self, token: str, analysis: str, crypto_data: Dict[str, Any], timeframe: str = "1h") -> str:
+    def _format_tweet_analysis(self, token: str, analysis: str, market_data: Dict[str, Any], timeframe: str = "1h") -> str:
         """
         Format analysis for Twitter with no hashtags to maximize content
         Supports multiple timeframes (1h, 24h, 7d)
+        
+        Args:
+            token: Token symbol
+            analysis: Analysis text
+            market_data: Market data dictionary
+            timeframe: Timeframe for the analysis
+            
+        Returns:
+            Formatted analysis tweet
         """
         # Check if we need to add timeframe prefix
         if timeframe != "1h" and not any(prefix in analysis.upper() for prefix in [f"{timeframe.upper()} ", f"{timeframe}-"]):
@@ -2868,12 +4924,21 @@ class CryptoAnalysisBot:
     
         return tweet
 
+    @ensure_naive_datetimes
     def _analyze_market_sentiment(self, token: str, market_data: Dict[str, Any], 
                                  trigger_type: str, timeframe: str = "1h") -> Tuple[Optional[str], Optional[Dict]]:
         """
         Generate token-specific market analysis with focus on volume and smart money.
         Supports multiple timeframes (1h, 24h, 7d)
-        Returns the formatted tweet and data needed to store it in the database.
+        
+        Args:
+            token: Token symbol
+            market_data: Market data dictionary
+            trigger_type: Trigger type for the analysis
+            timeframe: Timeframe for the analysis
+            
+        Returns:
+            Tuple of (formatted_tweet, storage_data)
         """
         max_retries = 3
         retry_count = 0
@@ -3194,10 +5259,18 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
         logger.log_error(f"Market Analysis - {timeframe}", "Maximum retries reached")
         return None, None
 
+    @ensure_naive_datetimes
     def _should_post_update(self, token: str, new_data: Dict[str, Any], timeframe: str = "1h") -> Tuple[bool, str]:
         """
         Determine if we should post an update based on market changes for a specific timeframe
-        Returns (should_post, trigger_reason)
+        
+        Args:
+            token: Token symbol
+            new_data: Latest market data dictionary
+            timeframe: Timeframe for the analysis
+            
+        Returns:
+            Tuple of (should_post, trigger_reason)
         """
         if not self.last_market_data:
             self.last_market_data = new_data
@@ -3316,6 +5389,7 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
 
         return should_post, trigger_reason
 
+    @ensure_naive_datetimes
     def _evaluate_expired_predictions(self) -> None:
         """
         Find and evaluate expired predictions across all timeframes
@@ -3387,631 +5461,11 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
         except Exception as e:
             logger.log_error("Evaluate Expired Predictions", str(e))
 
-    def _generate_weekly_summary(self) -> bool:
-        """Generate and post a weekly summary of predictions and performance across all timeframes"""
-        try:
-            # Check if it's Sunday (weekday 6) and around midnight
-            now = datetime.now()
-            if now.weekday() != 6 or now.hour != 0:
-                return False
-                
-            # Get performance stats for all timeframes
-            overall_stats = {}
-            for timeframe in self.timeframes:
-                performance_stats = self.config.db.get_prediction_performance(timeframe=timeframe)
-                
-                if not performance_stats:
-                    continue
-                    
-                # Calculate overall stats for this timeframe
-                total_correct = sum(p["correct_predictions"] for p in performance_stats)
-                total_predictions = sum(p["total_predictions"] for p in performance_stats)
-                
-                if total_predictions > 0:
-                    overall_accuracy = (total_correct / total_predictions) * 100
-                    overall_stats[timeframe] = {
-                        "accuracy": overall_accuracy,
-                        "total": total_predictions,
-                        "correct": total_correct
-                    }
-                    
-                    # Get token-specific stats
-                    token_stats = {}
-                    for stat in performance_stats:
-                        token = stat["token"]
-                        if stat["total_predictions"] > 0:
-                            token_stats[token] = {
-                                "accuracy": stat["accuracy_rate"],
-                                "total": stat["total_predictions"]
-                            }
-                    
-                    # Sort tokens by accuracy
-                    sorted_tokens = sorted(token_stats.items(), key=lambda x: x[1]["accuracy"], reverse=True)
-                    overall_stats[timeframe]["top_tokens"] = sorted_tokens[:3]
-                    overall_stats[timeframe]["bottom_tokens"] = sorted_tokens[-3:] if len(sorted_tokens) >= 3 else []
-            
-            if not overall_stats:
-                return False
-                
-            # Generate report
-            report = "📊 WEEKLY PREDICTION SUMMARY 📊\n\n"
-            
-            # Add summary for each timeframe
-            for timeframe, stats in overall_stats.items():
-                if timeframe == "1h":
-                    display_tf = "1 HOUR"
-                elif timeframe == "24h":
-                    display_tf = "24 HOUR"
-                else:  # 7d
-                    display_tf = "7 DAY"
-                    
-                report += f"== {display_tf} PREDICTIONS ==\n"
-                report += f"Overall Accuracy: {stats['accuracy']:.1f}% ({stats['correct']}/{stats['total']})\n\n"
-                
-                if stats.get("top_tokens"):
-                    report += "Top Performers:\n"
-                    for token, token_stats in stats["top_tokens"]:
-                        report += f"#{token}: {token_stats['accuracy']:.1f}% ({token_stats['total']} predictions)\n"
-                        
-                if stats.get("bottom_tokens"):
-                    report += "\nBottom Performers:\n"
-                    for token, token_stats in stats["bottom_tokens"]:
-                        report += f"#{token}: {token_stats['accuracy']:.1f}% ({token_stats['total']} predictions)\n"
-                        
-                report += "\n"
-                
-            # Ensure report isn't too long
-            max_length = self.config.TWEET_CONSTRAINTS['HARD_STOP_LENGTH']
-            if len(report) > max_length:
-                # Truncate report intelligently
-                sections = report.split("==")
-                shortened_report = sections[0]  # Keep header
-                
-                # Add as many sections as will fit
-                for section in sections[1:]:
-                    if len(shortened_report + "==" + section) <= max_length:
-                        shortened_report += "==" + section
-                    else:
-                        break
-                        
-                report = shortened_report
-            
-            # Post the weekly summary
-            return self._post_analysis(report, timeframe="summary")
-            
-        except Exception as e:
-            logger.log_error("Weekly Summary", str(e))
-            return False
-
-    def _prioritize_tokens(self, available_tokens: List[str], market_data: Dict[str, Any]) -> List[str]:
-        """Prioritize tokens across all timeframes based on momentum score and other factors"""
-        try:
-            token_priorities = []
-        
-            for token in available_tokens:
-                # Calculate token-specific priority scores for each timeframe
-                priority_scores = {}
-                for timeframe in self.timeframes:
-                    # Calculate momentum score for this timeframe
-                    momentum_score = self._calculate_momentum_score(token, market_data, timeframe=timeframe)
-                
-                    # Get latest prediction time for this token and timeframe
-                    last_prediction = self.config.db.get_active_predictions(token=token, timeframe=timeframe)
-                    hours_since_prediction = 24  # Default high value
-                
-                    if last_prediction:
-                        last_time = datetime.fromisoformat(last_prediction[0]["timestamp"])
-                        hours_since_prediction = safe_datetime_diff(datetime.now(), last_time) / 3600
-                
-                    # Scale time factor based on timeframe
-                    if timeframe == "1h":
-                        time_factor = 2.0  # Regular weight for 1h
-                    elif timeframe == "24h":
-                        time_factor = 0.5  # Lower weight for 24h
-                    else:  # 7d
-                        time_factor = 0.1  # Lowest weight for 7d
-                        
-                    # Priority score combines momentum and time since last prediction
-                    priority_scores[timeframe] = momentum_score + (hours_since_prediction * time_factor)
-                
-                # Combined score is weighted average across all timeframes with focus on shorter timeframes
-                combined_score = (
-                    priority_scores.get("1h", 0) * 0.6 +
-                    priority_scores.get("24h", 0) * 0.3 +
-                    priority_scores.get("7d", 0) * 0.1
-                )
-                
-                token_priorities.append((token, combined_score))
-        
-            # Sort by priority score (highest first)
-            sorted_tokens = [t[0] for t in sorted(token_priorities, key=lambda x: x[1], reverse=True)]
-        
-            return sorted_tokens
-        
-        except Exception as e:
-            logger.log_error("Token Prioritization", str(e))
-            return available_tokens  # Return original list on error
-
-    def _generate_predictions(self, token: str, market_data: Dict[str, Any], timeframe: str = "1h") -> Dict[str, Any]:
-        """
-        Generate market predictions for a specific token at a specific timeframe
-        """
-        try:
-            logger.logger.info(f"Generating {timeframe} predictions for {token}")
-        
-            # Fix: Add try/except to handle the max() arg is an empty sequence error
-            try:
-                # Generate prediction for the specified timeframe
-                prediction = self.prediction_engine.generate_prediction(
-                    token=token,
-                    market_data=market_data,
-                    timeframe=timeframe
-                )
-            except ValueError as ve:
-                # Handle the empty sequence error specifically
-                if "max() arg is an empty sequence" in str(ve):
-                    logger.logger.warning(f"Empty sequence error for {token} ({timeframe}), using fallback prediction")
-                    # Create a basic fallback prediction
-                    token_data = market_data.get(token, {})
-                    current_price = token_data.get('current_price', 0)
-                
-                    # Adjust fallback values based on timeframe
-                    if timeframe == "1h":
-                        change_pct = 0.5
-                        confidence = 60
-                        range_factor = 0.01
-                    elif timeframe == "24h":
-                        change_pct = 1.2
-                        confidence = 55
-                        range_factor = 0.025
-                    else:  # 7d
-                        change_pct = 2.5
-                        confidence = 50
-                        range_factor = 0.05
-                
-                    prediction = {
-                        "prediction": {
-                            "price": current_price * (1 + change_pct/100),
-                            "confidence": confidence,
-                            "lower_bound": current_price * (1 - range_factor),
-                            "upper_bound": current_price * (1 + range_factor),
-                            "percent_change": change_pct,
-                            "timeframe": timeframe
-                        },
-                        "rationale": f"Technical analysis based on recent price action for {token} over the {timeframe} timeframe.",
-                        "sentiment": "NEUTRAL",
-                        "key_factors": ["Technical analysis", "Recent price action", "Market conditions"]
-                    }
-                else:
-                    # Re-raise other ValueError exceptions
-                    raise
-        
-            # Store prediction in database
-            prediction_id = self.config.db.store_prediction(token, prediction, timeframe=timeframe)
-            logger.logger.info(f"Stored {token} {timeframe} prediction with ID {prediction_id}")
-        
-            return prediction
-        
-        except Exception as e:
-            logger.log_error(f"Generate Predictions - {token} ({timeframe})", str(e))
-            return {}
-
-    def _run_analysis_cycle(self) -> None:
-        """Run analysis and posting cycle for all tokens with multi-timeframe prediction integration"""
-        try:
-            # First, evaluate any expired predictions
-            self._evaluate_expired_predictions()
-            logger.logger.debug("TIMEFRAME DEBUGGING INFO:")
-            for tf in self.timeframes:
-                logger.logger.debug(f"Timeframe: {tf}")
-                last_post = self.timeframe_last_post.get(tf)
-                next_scheduled = self.next_scheduled_posts.get(tf)
-                logger.logger.debug(f"  last_post type: {type(last_post)}, value: {last_post}")
-                logger.logger.debug(f"  next_scheduled type: {type(next_scheduled)}, value: {next_scheduled}")
-            
-            # Get market data
-            market_data = self._get_crypto_data()
-            if not market_data:
-                logger.logger.error("Failed to fetch market data")
-                return
-        
-            # Get available tokens
-            available_tokens = [token for token in self.reference_tokens if token in market_data]
-            if not available_tokens:
-                logger.logger.error("No token data available")
-                return
-        
-            # Decide what type of content to prioritize
-            post_priority = self._decide_post_type(market_data)
-
-            # Act based on the decision
-            if post_priority == "reply":
-                # Prioritize finding and replying to posts
-                if self._check_for_reply_opportunities(market_data):
-                    logger.logger.info("Successfully posted replies based on priority decision")
-                    return
-                # Fall back to other post types if no reply opportunities
-            
-            elif post_priority == "prediction":
-                # Prioritize prediction posts (try timeframe rotation first)
-                if self._post_timeframe_rotation(market_data):
-                    logger.logger.info("Posted scheduled timeframe prediction based on priority decision")
-                    return
-                # Fall back to token-specific predictions for 1h timeframe
-            
-            elif post_priority == "correlation":
-                # Generate and post correlation report
-                report_timeframe = self.timeframes[datetime.now().hour % len(self.timeframes)]
-                correlation_report = self._generate_correlation_report(market_data, timeframe=report_timeframe)
-                if correlation_report and self._post_analysis(correlation_report, timeframe=report_timeframe):
-                    logger.logger.info(f"Posted {report_timeframe} correlation matrix report based on priority decision")
-                    return
-        
-            # Initialize trigger_type with a default value to prevent NoneType errors
-            trigger_type = "regular_interval"
-            
-            # Prioritize tokens instead of just shuffling
-            available_tokens = self._prioritize_tokens(available_tokens, market_data)
-    
-            # For 1h predictions and regular updates, try each token until we find one that's suitable
-            for token_to_analyze in available_tokens:
-                should_post, token_trigger_type = self._should_post_update(token_to_analyze, market_data, timeframe="1h")
-        
-                if should_post:
-                    # Update the main trigger_type variable
-                    trigger_type = token_trigger_type
-                    logger.logger.info(f"Starting {token_to_analyze} analysis cycle - Trigger: {trigger_type}")
-            
-                    # Generate prediction for this token with 1h timeframe
-                    prediction = self._generate_predictions(token_to_analyze, market_data, timeframe="1h")
-            
-                    if not prediction:
-                        logger.logger.error(f"Failed to generate 1h prediction for {token_to_analyze}")
-                        continue
-
-                    # Get both standard analysis and prediction-focused content 
-                    standard_analysis, storage_data = self._analyze_market_sentiment(
-                        token_to_analyze, market_data, trigger_type, timeframe="1h"
-                    )
-                    prediction_tweet = self._format_prediction_tweet(token_to_analyze, prediction, market_data, timeframe="1h")
-            
-                    # Choose which type of content to post based on trigger and past posts
-                    # For prediction-specific triggers or every third post, post prediction
-                    should_post_prediction = (
-                        "prediction" in trigger_type or 
-                        random.random() < 0.35  # 35% chance of posting prediction instead of analysis
-                    )
-            
-                    if should_post_prediction:
-                        analysis_to_post = prediction_tweet
-                        # Add prediction data to storage
-                        if storage_data:
-                            storage_data['is_prediction'] = True
-                            storage_data['prediction_data'] = prediction
-                    else:
-                        analysis_to_post = standard_analysis
-                        if storage_data:
-                            storage_data['is_prediction'] = False
-            
-                    if not analysis_to_post:
-                        logger.logger.error(f"Failed to generate content for {token_to_analyze}")
-                        continue
-                
-                    # Check for duplicates
-                    last_posts = self._get_last_posts_by_timeframe(timeframe="1h")
-                    if not self._is_duplicate_analysis(analysis_to_post, last_posts, timeframe="1h"):
-                        if self._post_analysis(analysis_to_post, timeframe="1h"):
-                            # Only store in database after successful posting
-                            if storage_data:
-                                self.config.db.store_posted_content(**storage_data)
-                        
-                            logger.logger.info(
-                                f"Successfully posted {token_to_analyze} "
-                                f"{'prediction' if should_post_prediction else 'analysis'} - "
-                                f"Trigger: {trigger_type}"
-                            )
-                    
-                            # Store additional smart money metrics
-                            if token_to_analyze in market_data:
-                                smart_money = self._analyze_smart_money_indicators(
-                                    token_to_analyze, market_data[token_to_analyze], timeframe="1h"
-                                )
-                                self.config.db.store_smart_money_indicators(token_to_analyze, smart_money)
-                        
-                                # Store market comparison data
-                                vs_market = self._analyze_token_vs_market(token_to_analyze, market_data, timeframe="1h")
-                                if vs_market:
-                                    self.config.db.store_token_market_comparison(
-                                        token_to_analyze,
-                                        vs_market.get('vs_market_avg_change', 0),
-                                        vs_market.get('vs_market_volume_growth', 0),
-                                        vs_market.get('outperforming_market', False),
-                                        vs_market.get('correlations', {})
-                                    )
-                    
-                            # Successfully posted, so we're done with this cycle
-                            return
-                        else:
-                            logger.logger.error(f"Failed to post {token_to_analyze} {'prediction' if should_post_prediction else 'analysis'}")
-                            continue  # Try next token
-                    else:
-                        logger.logger.info(f"Skipping duplicate {token_to_analyze} content - trying another token")
-                        continue  # Try next token
-                else:
-                    logger.logger.debug(f"No significant {token_to_analyze} changes detected, trying another token")
-    
-            # If we couldn't find any token-specific update to post, 
-            # try posting a correlation report on regular intervals
-            if "regular_interval" in trigger_type:
-                # Alternate between different timeframe correlation reports
-                current_hour = datetime.now().hour
-                report_timeframe = self.timeframes[current_hour % len(self.timeframes)]
-            
-                correlation_report = self._generate_correlation_report(market_data, timeframe=report_timeframe)
-                if correlation_report and self._post_analysis(correlation_report, timeframe=report_timeframe):
-                    logger.logger.info(f"Posted {report_timeframe} correlation matrix report")
-                    return      
-
-            # If still no post, try reply opportunities as a last resort
-            if post_priority != "reply":  # Only if we haven't already tried replies
-                logger.logger.info("Checking for reply opportunities as fallback")
-                if self._check_for_reply_opportunities(market_data):
-                    logger.logger.info("Successfully posted replies as fallback")
-                    return
-
-            # If we get here, we tried all tokens but couldn't post anything
-            logger.logger.warning("Tried all available tokens but couldn't post any analysis or replies")
-        
-        except Exception as e:
-            logger.log_error("Token Analysis Cycle", str(e))
-
     @ensure_naive_datetimes
-    def _decide_post_type(self, market_data: Dict[str, Any]) -> str:
-        """
-        Make a strategic decision on what type of post to prioritize: prediction, analysis, or reply
-    
-        Returns:
-            String indicating the recommended action: "prediction", "analysis", "reply", or "correlation"
-        """
-        try:
-            now = strip_timezone(datetime.now())
-    
-            # Initialize decision factors
-            decision_factors = {
-                'prediction': 0.0,
-                'analysis': 0.0,
-                'reply': 0.0,
-                'correlation': 0.0
-            }
-    
-            # Factor 1: Time since last post of each type
-            # Use existing database methods instead of get_last_post_time
-            try:
-                # Get recent posts from the database
-                recent_posts = self.config.db.get_recent_posts(hours=24)
-        
-                # Find the most recent posts of each type
-                last_analysis_time = None
-                last_prediction_time = None
-                last_correlation_time = None
-        
-                for post in recent_posts:
-                    # Convert timestamp to datetime if it's a string
-                    post_timestamp = post.get('timestamp')
-                    if isinstance(post_timestamp, str):
-                        try:
-                            post_timestamp = datetime.fromisoformat(post_timestamp)
-                        except ValueError:
-                            continue
-            
-                    # Ensure we have a timezone-naive datetime
-                    post_timestamp = strip_timezone(post_timestamp)
-                    if post_timestamp is None:
-                        continue
-            
-                    # Check if it's a prediction post
-                    if post.get('is_prediction', False):
-                        if last_prediction_time is None or post_timestamp > last_prediction_time:
-                            last_prediction_time = post_timestamp
-                    # Check if it's a correlation post
-                    elif 'CORRELATION' in post.get('content', '').upper():
-                        if last_correlation_time is None or post_timestamp > last_correlation_time:
-                            last_correlation_time = post_timestamp
-                    # Otherwise it's an analysis post
-                    else:
-                        if last_analysis_time is None or post_timestamp > last_analysis_time:
-                            last_analysis_time = post_timestamp
-            except Exception as db_err:
-                logger.logger.warning(f"Error retrieving recent posts: {str(db_err)}")
-                last_analysis_time = now - timedelta(hours=12)  # Default fallback
-                last_prediction_time = now - timedelta(hours=12)  # Default fallback
-                last_correlation_time = now - timedelta(hours=48)  # Default fallback
-    
-            # Set default values if no posts found
-            if last_analysis_time is None:
-                last_analysis_time = now - timedelta(hours=24)
-            if last_prediction_time is None:
-                last_prediction_time = now - timedelta(hours=24)
-            if last_correlation_time is None:
-                last_correlation_time = now - timedelta(hours=48)
-            
-            # Calculate hours since each type of post using safe_datetime_diff
-            hours_since_analysis = safe_datetime_diff(now, last_analysis_time) / 3600
-            hours_since_prediction = safe_datetime_diff(now, last_prediction_time) / 3600
-            hours_since_correlation = safe_datetime_diff(now, last_correlation_time) / 3600
-    
-            # Check time since last reply (using our sanitized datetime)
-            last_reply_time = strip_timezone(self._ensure_datetime(self.last_reply_time))
-            hours_since_reply = safe_datetime_diff(now, last_reply_time) / 3600
-    
-            # Add time factors to decision weights (more time = higher weight)
-            decision_factors['prediction'] += min(5.0, hours_since_prediction * 0.5)  # Cap at 5.0
-            decision_factors['analysis'] += min(5.0, hours_since_analysis * 0.5)  # Cap at 5.0
-            decision_factors['reply'] += min(5.0, hours_since_reply * 0.8)  # Higher weight for replies
-            decision_factors['correlation'] += min(3.0, hours_since_correlation * 0.1)  # Lower weight for correlations
-    
-            # Factor 2: Time of day considerations - adjust to audience activity patterns
-            current_hour = now.hour
-    
-            # Morning hours (6-10 AM): Favor analyses and predictions for day traders
-            if 6 <= current_hour <= 10:
-                decision_factors['prediction'] += 2.0
-                decision_factors['analysis'] += 1.5
-                decision_factors['reply'] += 0.5
-        
-            # Mid-day (11-15): Balanced approach, slight favor to replies
-            elif 11 <= current_hour <= 15:
-                decision_factors['prediction'] += 1.0
-                decision_factors['analysis'] += 1.0
-                decision_factors['reply'] += 1.5
-        
-            # Evening hours (16-22): Strong favor to replies to engage with community
-            elif 16 <= current_hour <= 22:
-                decision_factors['prediction'] += 0.5
-                decision_factors['analysis'] += 1.0
-                decision_factors['reply'] += 2.5
-        
-            # Late night (23-5): Favor analyses, deprioritize replies (fewer active users)
-            else:
-                decision_factors['prediction'] += 1.0
-                decision_factors['analysis'] += 2.0
-                decision_factors['reply'] += 0.5
-                decision_factors['correlation'] += 1.5  # Good time for correlation reports
-    
-            # Factor 3: Market volatility - in volatile markets, predictions and analyses are more valuable
-            market_volatility = self._calculate_market_volatility(market_data)
-    
-            # High volatility boosts prediction and analysis priority
-            if market_volatility > 3.0:  # High volatility
-                decision_factors['prediction'] += 2.0
-                decision_factors['analysis'] += 1.5
-            elif market_volatility > 1.5:  # Moderate volatility
-                decision_factors['prediction'] += 1.0
-                decision_factors['analysis'] += 1.0
-    
-            # Factor 4: Community engagement level - check for active discussions
-            active_discussions = self._check_for_active_discussions(market_data)
-            if active_discussions:
-                # If there are active discussions, favor replies
-                decision_factors['reply'] += len(active_discussions) * 0.5  # More discussions = higher priority
-                logger.logger.debug(f"Found {len(active_discussions)} active discussions, boosting reply priority")
-    
-            # Factor 5: Check scheduled timeframe posts - these get high priority
-            due_timeframes = [tf for tf in self.timeframes if self._should_post_timeframe_now(tf)]
-            if due_timeframes:
-                decision_factors['prediction'] += 3.0  # High priority for scheduled predictions
-                logger.logger.debug(f"Scheduled timeframe posts due: {due_timeframes}")
-    
-            # Factor 6: Day of week considerations
-            weekday = now.weekday()  # 0=Monday, 6=Sunday
-    
-            # Weekends: More casual engagement (replies), less formal analysis
-            if weekday >= 5:  # Saturday or Sunday
-                decision_factors['reply'] += 1.5
-                decision_factors['correlation'] += 0.5
-            # Mid-week: Focus on predictions and analysis
-            elif 1 <= weekday <= 3:  # Tuesday to Thursday
-                decision_factors['prediction'] += 1.0
-                decision_factors['analysis'] += 0.5
-    
-            # Log decision factors for debugging
-            logger.logger.debug(f"Post type decision factors: {decision_factors}")
-    
-            # Determine highest priority action
-            highest_priority = max(decision_factors.items(), key=lambda x: x[1])
-            action = highest_priority[0]
-    
-            # Special case: If correlation has reasonable score and it's been a while, prioritize it
-            if hours_since_correlation > 48 and decision_factors['correlation'] > 2.0:
-                action = 'correlation'
-                logger.logger.debug(f"Overriding to correlation post ({hours_since_correlation}h since last one)")
-    
-            logger.logger.info(f"Decided post type: {action} (score: {highest_priority[1]:.2f})")
-            return action
-    
-        except Exception as e:
-            logger.log_error("Decide Post Type", str(e))
-            # Default to analysis as a safe fallback
-            return "analysis"
-        
-    def _calculate_market_volatility(self, market_data: Dict[str, Any]) -> float:
-        """Calculate overall market volatility score based on price movements"""
-        try:
-            if not market_data:
-                return 1.0  # Default moderate volatility
-            
-            # Extract price changes for major tokens
-            major_tokens = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP']
-            changes = []
-        
-            for token in major_tokens:
-                if token in market_data:
-                    change = abs(market_data[token].get('price_change_percentage_24h', 0))
-                    changes.append(change)
-        
-            if not changes:
-                return 1.0
-            
-            # Calculate average absolute price change
-            avg_change = sum(changes) / len(changes)
-        
-            # Calculate volatility score (normalized to a 0-5 scale)
-            # <1% = Very Low, 1-2% = Low, 2-3% = Moderate, 3-5% = High, >5% = Very High
-            if avg_change < 1.0:
-                return 0.5  # Very low volatility
-            elif avg_change < 2.0:
-                return 1.0  # Low volatility
-            elif avg_change < 3.0:
-                return 2.0  # Moderate volatility
-            elif avg_change < 5.0:
-                return 3.0  # High volatility
-            else:
-                return 5.0  # Very high volatility
-    
-        except Exception as e:
-            logger.log_error("Calculate Market Volatility", str(e))
-            return 1.0  # Default to moderate volatility on error
-
-    def _check_for_active_discussions(self, market_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Check for active token discussions that might warrant replies
-    
-        Returns:
-            List of posts representing active discussions
-        """
-        try:
-            # Get recent timeline posts
-            recent_posts = self.timeline_scraper.scrape_timeline(count=15)
-            if not recent_posts:
-                return []
-            
-            # Filter for posts with engagement (replies, likes)
-            engaged_posts = []
-            for post in recent_posts:
-                # Simple engagement check
-                has_engagement = (
-                    post.get('reply_count', 0) > 0 or
-                    post.get('like_count', 0) > 2 or
-                    post.get('retweet_count', 0) > 0
-                )
-            
-                if has_engagement:
-                    # Analyze the post content
-                    analysis = self.content_analyzer.analyze_post(post)
-                    post['content_analysis'] = analysis
-                
-                    # Check if it's a market-related post with sufficient reply score
-                    if analysis.get('reply_worthy', False):
-                        engaged_posts.append(post)
-        
-            return engaged_posts
-    
-        except Exception as e:
-            logger.log_error("Check Active Discussions", str(e))
-            return []    
-
     def start(self) -> None:
-        """Main bot execution loop with multi-timeframe support and reply functionality"""
+        """
+        Main bot execution loop with multi-timeframe support and reply functionality
+        """
         try:
             retry_count = 0
             max_setup_retries = 3
@@ -4075,7 +5529,7 @@ Note: {selected_focus} Keep the analysis fresh and varied. Avoid repetitive phra
                     logger.logger.debug(f"Sleeping for {sleep_time:.1f}s until next check")
                     time.sleep(sleep_time)
                     
-                    self.last_check_time = datetime.now()
+                    self.last_check_time = strip_timezone(datetime.now())
                     
                 except Exception as e:
                     logger.log_error("Analysis Cycle", str(e), exc_info=True)
@@ -4095,4 +5549,3 @@ if __name__ == "__main__":
         bot.start()
     except Exception as e:
         logger.log_error("Bot Startup", str(e))
-
